@@ -2,15 +2,13 @@
 
 负责:
 - 接收用户请求
-- 调度菜系专家子 Agent (Phase 1: 只有川菜)
+- 调度菜系专家子 Agent (Phase 2: 从 cuisines.yaml 动态加载)
 - 综合专家意见输出 Top 推荐
 
-Phase 1 实现:
-- 加载 cuisines.yaml (后续 Phase 2 完整化)
-- 默认带 SichuanAgent
-- 支持注入自定义菜系
-- system prompt 从 config/prompts/master_v1.md 加载
-- run(user_msg) 流式返回最终响应
+Phase 2 接入:
+- 默认菜系从 cuisines.yaml 动态加载 (Phase 1 硬编码 SichuanAgent)
+- 行为兼容: 默认 fallback 文本与 Phase 1 一致
+- 显式传 cuisine_agents 时不走 registry
 """
 from __future__ import annotations
 
@@ -18,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from food_agent.agents.base import BaseCuisineAgent
-from food_agent.agents.cuisines.sichuan import SichuanAgent
 from food_agent.exceptions import LLMError
 from food_agent.llm import get_llm_cfg
 from food_agent.tools.cuisine_consult import CuisineConsultTool
@@ -26,6 +23,10 @@ from food_agent.tools.cuisine_consult import CuisineConsultTool
 # Master system prompt 路径
 _PACKAGE_DIR = Path(__file__).resolve().parent
 MASTER_PROMPT_PATH = _PACKAGE_DIR / "config" / "prompts" / "master_v1.md"
+
+# Phase 1 兼容: 默认 fallback 文本 (与原 _default_cuisines 一致)
+# Phase 3 计划: per-cuisine fallback (每个菜系自己定义)
+_DEFAULT_FALLBACK_TEXT = "推荐通用川菜: 麻婆豆腐、回锅肉"
 
 
 def _load_master_prompt(path: Path | None = None) -> str:
@@ -57,7 +58,7 @@ class FoodAgent:
 
         Args:
             llm: LLM 实例 / 配置. None 时用默认.
-            cuisine_agents: 菜系 agent 列表. None 时加载 Phase 1 默认 (sichuan).
+            cuisine_agents: 菜系 agent 列表. None 时从 cuisines.yaml 动态加载.
             system_prompt: 覆盖默认 master prompt.
             max_rounds: 最大调度轮数, 防止死循环.
         """
@@ -77,11 +78,16 @@ class FoodAgent:
         self._assistant = self._build_assistant()
 
     def _default_cuisines(self) -> list[BaseCuisineAgent]:
-        """Phase 1 默认菜系: 川菜.
+        """从 cuisines.yaml 动态加载所有已实现菜系.
 
-        Phase 2 会从 cuisines.yaml 动态加载全部 14 个.
+        yaml 里有但 .py 未实现的菜系 → 跳过 (strict=False).
         """
-        return [SichuanAgent(llm=self.llm, fallback="推荐通用川菜: 麻婆豆腐、回锅肉")]
+        from food_agent.registry import load_all_cuisines
+
+        return load_all_cuisines(
+            llm_cfg=self.llm,
+            fallback_text=_DEFAULT_FALLBACK_TEXT,
+        )
 
     def _build_assistant(self) -> Any:
         from qwen_agent.agents import Assistant
@@ -93,6 +99,15 @@ class FoodAgent:
             name="master_foodie",
             description="地球顶级美食家, 调度各菜系专家",
         )
+
+    def _assistant_call_kwargs(self) -> dict[str, Any]:
+        """给 FoodAgent.run 传给 assistant.run 的 kwargs.
+
+        Note: MiniMax M3 的流式 tool_call 累积在 qwen-agent oai.py 中有 bug
+        (function_call 字段会被错误合并/丢失), 所以强制 stream=False.
+        详见: master.py 的 disable_stream flag.
+        """
+        return {"stream": False}
 
     def run(self, user_msg: str, history: list[dict] | None = None) -> str:
         """运行主流程.
@@ -111,7 +126,7 @@ class FoodAgent:
         messages.append({"role": "user", "content": user_msg})
 
         try:
-            responses = list(self._assistant.run(messages))
+            responses = list(self._assistant.run(messages, **self._assistant_call_kwargs()))
         except LLMError:
             raise
         except Exception as e:
