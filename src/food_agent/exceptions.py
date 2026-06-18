@@ -22,7 +22,15 @@ class ToolCallError(FoodAgentError):
     """工具调用失败 (含可重试和不可重试)."""
 
 
-class ToolTimeoutError(ToolCallError):
+class RetryableToolCallError(ToolCallError):
+    """可重试的工具调用错误 (网络/超时/限流/5xx)."""
+
+
+class NonRetryableToolCallError(ToolCallError):
+    """不可重试的工具调用错误 (参数错/权限错/404)."""
+
+
+class ToolTimeoutError(RetryableToolCallError):
     """工具调用超时."""
 
 

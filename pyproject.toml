@@ -87,6 +87,10 @@ ignore = ["E501", "B008"]  # 允许长行；B008 是函数默认参数依赖
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011", "RUF001", "RUF002", "RUF003"]            # 测试中允许 assert 和中文标点
 "src/**/__init__.py" = ["RUF002"]                              # docstring 允许中文标点
+"src/**/cli.py" = ["RUF001", "RUF002", "RUF003"]               # CLI 文案允许中文标点
+"src/**/master.py" = ["RUF001", "RUF002", "RUF003"]            # master 降级文案允许中文标点
+"src/**/tools/*.py" = ["RUF001", "RUF002", "RUF003", "RUF012"]  # BaseTool 协议需要可变默认值
+"src/**/agents/base.py" = ["RUF001", "RUF002", "RUF003"]        # 降级文案允许中文标点
 
 # ---- mypy -------------------------------------------------------------------
 [tool.mypy]
