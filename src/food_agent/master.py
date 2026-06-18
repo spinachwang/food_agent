@@ -18,6 +18,7 @@ from typing import Any
 from food_agent.agents.base import BaseCuisineAgent
 from food_agent.exceptions import LLMError
 from food_agent.llm import get_llm_cfg
+from food_agent.memory.short_term import ShortTermMemory
 from food_agent.tools.cuisine_consult import CuisineConsultTool
 
 # Master system prompt 路径
@@ -109,12 +110,28 @@ class FoodAgent:
         """
         return {"stream": False}
 
-    def run(self, user_msg: str, history: list[dict] | None = None) -> str:
+    def _get_or_create_stm(self, session_id: str) -> "ShortTermMemory":
+        """懒加载 per-session 短期记忆."""
+        if not hasattr(self, "_short_term_by_session"):
+            self._short_term_by_session: dict[str, ShortTermMemory] = {}
+        stm = self._short_term_by_session.get(session_id)
+        if stm is None:
+            stm = ShortTermMemory()
+            self._short_term_by_session[session_id] = stm
+        return stm
+
+    def run(
+        self,
+        user_msg: str,
+        session_id: str | None = None,
+        history: list[dict] | None = None,
+    ) -> str:
         """运行主流程.
 
         Args:
             user_msg: 用户消息.
-            history: 历史消息 (可选).
+            session_id: 会话 ID (Phase 2.5 短期记忆). 传 None 则无记忆 (Phase 1 行为).
+            history: 显式历史消息 (可选, 优先级高于 session_id).
 
         Returns:
             Assistant 的最终回复.
@@ -122,8 +139,18 @@ class FoodAgent:
         if not user_msg or not user_msg.strip():
             return "（老饕听着呢, 你想吃啥？）"
 
-        messages: list[dict] = list(history or [])
-        messages.append({"role": "user", "content": user_msg})
+        # 决定消息列表来源
+        if history is not None:
+            # 显式传 history 优先
+            messages: list[dict] = list(history)
+            messages.append({"role": "user", "content": user_msg})
+        elif session_id:
+            stm = self._get_or_create_stm(session_id)
+            # 注入历史 (summary + 最近消息)
+            messages = stm.get_messages()
+            messages.append({"role": "user", "content": user_msg})
+        else:
+            messages = [{"role": "user", "content": user_msg}]
 
         try:
             responses = list(self._assistant.run(messages, **self._assistant_call_kwargs()))
@@ -141,11 +168,27 @@ class FoodAgent:
             return self._fallback_response()
 
         # 取最后一条 assistant 消息
+        response = ""
         for msg in reversed(last_batch):
             content = self._extract_content(msg)
             if content and content.strip():
-                return content
-        return self._fallback_response()
+                response = content
+                break
+        if not response:
+            return self._fallback_response()
+
+        # 写回短期记忆
+        if session_id and history is None:
+            stm.add({"role": "user", "content": user_msg})
+            stm.add({"role": "assistant", "content": response})
+            if stm.should_summarize():
+                try:
+                    stm.summarize(self.llm)
+                except Exception as e:  # 摘要失败不挂上层
+                    import logging
+                    logging.getLogger(__name__).warning("summarize failed: %s", e)
+
+        return response
 
     @staticmethod
     def _extract_content(msg: Any) -> str:
