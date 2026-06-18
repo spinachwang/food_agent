@@ -4,11 +4,14 @@ Phase 1: 验证菜系专家能:
 1. 加载 system prompt + 知识库
 2. 接收用户消息, 返回 LLM 响应
 3. 暴露 metadata (id/name/category)
+
+Phase 2.3: 验证 prompt_file / knowledge_file 加载机制.
 """
 from __future__ import annotations
 
 from typing import Any
 
+from food_agent.agents.base import BaseCuisineAgent
 from food_agent.agents.cuisines.sichuan import SichuanAgent
 
 # ---- FakeLLM: 替代真实 LLM -------------------------------------------------
@@ -82,8 +85,9 @@ def test_sichuan_agent_metadata() -> None:
 def test_sichuan_agent_has_distinctive_prompt() -> None:
     """川菜专家 system prompt 应包含川菜相关关键词."""
     agent = SichuanAgent(llm=FakeLLM(["ok"]))
-    # 验证 prompt 不是空, 且包含川菜关键概念
-    assert "川菜" in agent.system_prompt or "麻婆" in agent.system_prompt
+    # 验证 _resolved_prompt 不是空, 且包含川菜关键概念
+    # (Phase 2.3 后 prompt 从 .md 文件加载, 通过 _resolved_prompt 访问)
+    assert any(k in agent._resolved_prompt for k in ("川菜", "麻婆", "老陈", "成都", "辣"))
 
 
 # ---- recommend() 方法 --------------------------------------------------------
@@ -141,3 +145,93 @@ def test_recommend_falls_back_on_error() -> None:
     result = agent.recommend("test")
     # 降级返回, 不抛
     assert "麻婆豆腐" in result
+
+
+# ---- Phase 2.3: prompt_file 加载机制 ----------------------------------------
+
+def test_sichuan_agent_loads_prompt_from_file() -> None:
+    """SichuanAgent 设了 prompt_file 后, 从 .md 文件加载 system_prompt."""
+    agent = SichuanAgent(llm=FakeLLM(["ok"]))
+    p = agent._resolved_prompt
+    assert isinstance(p, str)
+    assert len(p) > 50
+    assert any(k in p for k in ("川菜", "麻婆", "老陈", "成都", "回锅肉", "辣"))
+
+
+def test_sichuan_agent_loads_knowledge_from_file() -> None:
+    """SichuanAgent 设了 knowledge_file 后, 从 .md 文件加载 knowledge."""
+    agent = SichuanAgent(llm=FakeLLM(["ok"]))
+    k = agent._resolved_knowledge
+    assert isinstance(k, str)
+    assert len(k) > 50
+    assert any(kw in k for kw in ("陈麻婆", "春熙路", "成都", "解放碑", "海底"))
+
+
+def test_sichuan_agent_full_system_contains_both() -> None:
+    """_build_assistant 注入的 system_message 同时含 prompt + knowledge."""
+    agent = SichuanAgent(llm=FakeLLM(["x"]))
+    full = agent._resolved_prompt
+    if agent._resolved_knowledge:
+        full = f"{agent._resolved_prompt}\n\n## 知识库\n\n{agent._resolved_knowledge}"
+    assert "川菜" in full
+    assert "陈麻婆" in full or "成都" in full
+
+
+def test_base_cuisine_agent_priority_explicit_over_file() -> None:
+    """显式 system_prompt 胜过 prompt_file."""
+    agent = SichuanAgent(llm=FakeLLM(["ok"]), system_prompt="EXPLICIT_OVERRIDE")
+    assert "EXPLICIT_OVERRIDE" in agent._resolved_prompt
+    assert "EXPLICIT_OVERRIDE" not in agent.system_prompt  # 类属性仍是内联值
+
+
+def test_base_cuisine_agent_falls_back_when_file_missing() -> None:
+    """prompt_file 指向不存在的文件 → 降级到 system_prompt 类属性."""
+
+    class _TempAgent(BaseCuisineAgent):
+        cuisine_id = "temp"
+        cuisine_name = "Temp"
+        system_prompt = "INLINE_FALLBACK_CONTENT"
+        knowledge = ""
+        prompt_file = "nonexistent_xxx.md"
+        knowledge_file = ""
+
+        def describe(self) -> str:
+            return "x"
+
+    agent = _TempAgent(llm=FakeLLM(["ok"]))
+    assert agent._resolved_prompt == "INLINE_FALLBACK_CONTENT"
+
+
+def test_base_cuisine_agent_legacy_inline_only() -> None:
+    """向后兼容: 不设 prompt_file, 仅靠 system_prompt 类属性."""
+
+    class _LegacyAgent(BaseCuisineAgent):
+        cuisine_id = "legacy"
+        cuisine_name = "Legacy"
+        system_prompt = "LEGACY_PROMPT"
+        knowledge = "LEGACY_KNOWLEDGE"
+
+        def describe(self) -> str:
+            return "x"
+
+    agent = _LegacyAgent(llm=FakeLLM(["ok"]))
+    assert agent._resolved_prompt == "LEGACY_PROMPT"
+    assert agent._resolved_knowledge == "LEGACY_KNOWLEDGE"
+
+
+def test_base_cuisine_agent_knowledge_file_missing_falls_back() -> None:
+    """knowledge_file 指向不存在的文件 → 降级到 knowledge 类属性."""
+
+    class _Agent(BaseCuisineAgent):
+        cuisine_id = "k_test"
+        cuisine_name = "K"
+        system_prompt = "PROMPT"
+        knowledge = "INLINE_KNOWLEDGE"
+        prompt_file = ""
+        knowledge_file = "nonexistent_kb.md"
+
+        def describe(self) -> str:
+            return "x"
+
+    agent = _Agent(llm=FakeLLM(["ok"]))
+    assert agent._resolved_knowledge == "INLINE_KNOWLEDGE"

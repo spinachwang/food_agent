@@ -1,17 +1,30 @@
 """Agent 基类: BaseCuisineAgent.
 
 菜系专家的共同行为:
-1. 加载 system prompt + 知识库
+1. 加载 system prompt + 知识库 (从 .md 文件或内联类属性)
 2. 包装 qwen-agent.Assistant
 3. 暴露 cuisine_id / cuisine_name / recommend()
+
+Phase 2.3: 增加 prompt_file / knowledge_file 类属性, 支持从 .md 加载.
+优先级: 显式传入 > prompt_file 文件 > 内联 system_prompt 类属性.
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 from food_agent.exceptions import LLMError
 from food_agent.llm import get_llm_cfg
+
+logger = logging.getLogger(__name__)
+
+# 项目根: src/food_agent/agents/base.py → parents[2] = src/food_agent/
+_AGENTS_DIR = Path(__file__).resolve().parent
+_PACKAGE_DIR = _AGENTS_DIR.parent  # src/food_agent/
+_PROMPTS_DIR = _PACKAGE_DIR / "config" / "prompts"
+_KNOWLEDGE_DIR = _PACKAGE_DIR / "data" / "cuisines"
 
 
 class BaseCuisineAgent(ABC):
@@ -20,19 +33,27 @@ class BaseCuisineAgent(ABC):
     子类必须定义:
         cuisine_id: str      - 唯一标识
         cuisine_name: str    - 显示名
-        system_prompt: str   - 菜系专属 system prompt
-        knowledge: str       - 菜系知识库 (可选)
+
+    可选:
+        system_prompt: str   - 内联 system prompt (fallback)
+        knowledge: str       - 内联知识库 (fallback)
+        prompt_file: str     - 相对 config/prompts/ 的 .md 文件
+        knowledge_file: str  - 相对 data/cuisines/ 的 .md 文件
     """
 
     cuisine_id: str = ""
     cuisine_name: str = ""
     system_prompt: str = ""
     knowledge: str = ""
+    prompt_file: str = ""
+    knowledge_file: str = ""
 
     def __init__(
         self,
         llm: Any | None = None,
         fallback: str | None = None,
+        system_prompt: str | None = None,
+        knowledge: str | None = None,
         **kwargs: Any,
     ) -> None:
         """初始化.
@@ -41,19 +62,49 @@ class BaseCuisineAgent(ABC):
             llm: LLM 实例 (dict 配置 或 BaseChatModel 实例).
                  None 时用默认 get_llm_cfg().
             fallback: LLM 失败时的降级文本.
+            system_prompt: 显式覆盖 prompt (胜过 prompt_file 文件).
+            knowledge: 显式覆盖 knowledge (胜过 knowledge_file 文件).
             **kwargs: 透传给 Assistant.
         """
         self._fallback = fallback
         self._llm = llm if llm is not None else get_llm_cfg()
+        self._resolved_prompt = self._resolve_prompt(system_prompt)
+        self._resolved_knowledge = self._resolve_knowledge(knowledge)
         self._assistant = self._build_assistant(**kwargs)
+
+    def _resolve_prompt(self, explicit: str | None) -> str:
+        """决定 system_prompt 来源: 显式 > 文件 > 内联."""
+        if explicit is not None:
+            return explicit
+        if self.prompt_file:
+            path = _PROMPTS_DIR / self.prompt_file
+            if path.exists():
+                return path.read_text(encoding="utf-8").strip()
+            logger.warning(
+                "prompt_file missing, falling back to inline: %s", path
+            )
+        return self.system_prompt
+
+    def _resolve_knowledge(self, explicit: str | None) -> str:
+        """决定 knowledge 来源: 显式 > 文件 > 内联."""
+        if explicit is not None:
+            return explicit
+        if self.knowledge_file:
+            path = _KNOWLEDGE_DIR / self.knowledge_file
+            if path.exists():
+                return path.read_text(encoding="utf-8").strip()
+            logger.warning(
+                "knowledge_file missing, falling back to inline: %s", path
+            )
+        return self.knowledge
 
     def _build_assistant(self, **kwargs: Any) -> Any:
         """构造 qwen-agent.Assistant."""
         from qwen_agent.agents import Assistant
 
-        full_system = self.system_prompt
-        if self.knowledge:
-            full_system = f"{self.system_prompt}\n\n## 知识库\n\n{self.knowledge}"
+        full_system = self._resolved_prompt
+        if self._resolved_knowledge:
+            full_system = f"{self._resolved_prompt}\n\n## 知识库\n\n{self._resolved_knowledge}"
 
         # 默认 name/description, 但允许 kwargs 覆盖
         build_kwargs = {
