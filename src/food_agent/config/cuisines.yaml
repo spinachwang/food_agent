@@ -1,0 +1,143 @@
+# 菜系专家清单 (可插拔入口)
+# 新增菜系: 在 agents/cuisines/ 加 .py 文件, 然后在这里加 4 行即可.
+# 字段说明:
+#   id            - 唯一标识, 字母数字下划线
+#   name          - 显示名 (中文)
+#   category      - formal_cn | formal_exotic | fast_food | snack | drink
+#   subcategory   - 自由分类标签, 便于按需过滤
+#   prompt_file   - system prompt 路径 (相对 config/prompts/)
+#   knowledge_file - 菜系知识库 (相对 data/cuisines/)
+#   enabled       - 是否加载
+#   tags          - 标签数组, 用于灵活过滤
+
+cuisines:
+  # ============ 中式正餐 (8 大菜系) ============
+  - id: sichuan
+    name: 川菜
+    category: formal_cn
+    subcategory: sichuan
+    prompt_file: sichuan_v1.md
+    knowledge_file: sichuan.md
+    enabled: true
+    tags: [辣, 重口味, 西南]
+
+  - id: cantonese
+    name: 粤菜
+    category: formal_cn
+    subcategory: cantonese
+    prompt_file: cantonese_v1.md
+    knowledge_file: cantonese.md
+    enabled: true
+    tags: [清淡, 鲜, 煲汤, 早茶]
+
+  - id: shandong
+    name: 鲁菜
+    category: formal_cn
+    subcategory: shandong
+    prompt_file: shandong_v1.md
+    knowledge_file: shandong.md
+    enabled: true
+    tags: [咸, 北方, 大份]
+
+  - id: jiangsu
+    name: 苏菜
+    category: formal_cn
+    subcategory: jiangsu
+    prompt_file: jiangsu_v1.md
+    knowledge_file: jiangsu.md
+    enabled: true
+    tags: [清淡, 精致, 淮扬]
+
+  - id: zhejiang
+    name: 浙菜
+    category: formal_cn
+    subcategory: zhejiang
+    prompt_file: zhejiang_v1.md
+    knowledge_file: zhejiang.md
+    enabled: true
+    tags: [鲜, 江南]
+
+  - id: fujian
+    name: 闽菜
+    category: formal_cn
+    subcategory: fujian
+    prompt_file: fujian_v1.md
+    knowledge_file: fujian.md
+    enabled: true
+    tags: [鲜, 海鲜, 汤]
+
+  - id: hunan
+    name: 湘菜
+    category: formal_cn
+    subcategory: hunan
+    prompt_file: hunan_v1.md
+    knowledge_file: hunan.md
+    enabled: true
+    tags: [辣, 酸, 重口味]
+
+  - id: anhui
+    name: 徽菜
+    category: formal_cn
+    subcategory: anhui
+    prompt_file: anhui_v1.md
+    knowledge_file: anhui.md
+    enabled: true
+    tags: [重油, 重色, 山珍]
+
+  # ============ 异域正餐 ============
+  - id: japanese
+    name: 日料
+    category: formal_exotic
+    subcategory: japanese
+    prompt_file: japanese_v1.md
+    knowledge_file: japanese.md
+    enabled: true
+    tags: [鲜, 精致, 刺身, 寿司]
+
+  - id: western
+    name: 西餐
+    category: formal_exotic
+    subcategory: western
+    prompt_file: western_v1.md
+    knowledge_file: western.md
+    enabled: true
+    tags: [牛排, 意面, 正式]
+
+  # ============ 快餐 ============
+  - id: western_fastfood
+    name: 西式快餐
+    category: fast_food
+    subcategory: western_fastfood
+    prompt_file: western_fastfood_v1.md
+    knowledge_file: western_fastfood.md
+    enabled: true
+    tags: [麦当劳, 肯德基, 汉堡王, 必胜客, 快速, 平价]
+
+  - id: chinese_fastfood
+    name: 中式快餐
+    category: fast_food
+    subcategory: chinese_fastfood
+    prompt_file: chinese_fastfood_v1.md
+    knowledge_file: chinese_fastfood.md
+    enabled: true
+    tags: [沙县, 兰州拉面, 黄焖鸡, 桂林米粉, 快速, 平价]
+
+  # ============ 小吃/夜宵 ============
+  - id: snack
+    name: 小吃
+    category: snack
+    subcategory: snack
+    prompt_file: snack_v1.md
+    knowledge_file: snack.md
+    enabled: true
+    tags: [包子, 煎饼, 肉夹馍, 凉皮, 麻辣烫, 烧烤, 夜宵]
+
+  # ============ 甜品/饮品 ============
+  - id: dessert_drink
+    name: 甜品饮品
+    category: drink
+    subcategory: dessert_drink
+    prompt_file: dessert_drink_v1.md
+    knowledge_file: dessert_drink.md
+    enabled: true
+    tags: [奶茶, 咖啡, 烘焙, 糖水, 冰淇淋]
