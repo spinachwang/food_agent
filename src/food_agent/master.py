@@ -20,9 +20,18 @@ from typing import Any
 from food_agent.agents.base import BaseCuisineAgent
 from food_agent.exceptions import LLMError
 from food_agent.llm import get_llm_cfg
+from food_agent.mcp.amap_client import AmapClient
 from food_agent.memory.long_term import LongTermMemory
 from food_agent.memory.short_term import ShortTermMemory
 from food_agent.tools.cuisine_consult import CuisineConsultTool
+from food_agent.tools.location import (
+    GeocodeTool,
+    RegeocodeTool,
+    RouteTool,
+    SearchAroundTool,
+    WeatherTool,
+    set_amap_client as _set_amap_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +69,7 @@ class FoodAgent:
         system_prompt: str | None = None,
         max_rounds: int = 10,
         long_term: LongTermMemory | None = None,
+        amap_client: AmapClient | None = None,
     ) -> None:
         """初始化.
 
@@ -69,6 +79,9 @@ class FoodAgent:
             system_prompt: 覆盖默认 master prompt.
             max_rounds: 最大调度轮数, 防止死循环.
             long_term: 长期记忆 (Phase 2.6). None 时无持久化.
+            amap_client: 高德地图 MCP client (Phase 3.1). None 时无 location 工具.
+                      传了之后 5 个 location tool 自动加入 (geocode/regeocode/
+                      search_around/weather/route), 共享此 client.
         """
         self.llm = llm if llm is not None else get_llm_cfg()
         self.cuisine_agents: list[BaseCuisineAgent] = (
@@ -77,11 +90,26 @@ class FoodAgent:
         self.system_prompt = system_prompt or _load_master_prompt()
         self.max_rounds = max_rounds
         self._long_term = long_term
+        self._amap_client = amap_client
+
+        # 注册 amap client (location tools 通过 module-level 拿)
+        if amap_client is not None:
+            _set_amap_client(amap_client)
 
         # 每个菜系包成 tool
-        self.tools: list[CuisineConsultTool] = [
+        self.tools: list[Any] = [
             CuisineConsultTool(agent) for agent in self.cuisine_agents
         ]
+
+        # 加 5 个 location tools (如果 amap_client 存在)
+        if amap_client is not None:
+            self.tools.extend([
+                GeocodeTool(),
+                RegeocodeTool(),
+                SearchAroundTool(),
+                WeatherTool(),
+                RouteTool(),
+            ])
 
         # 构造 qwen-agent Assistant
         self._assistant = self._build_assistant()

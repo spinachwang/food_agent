@@ -27,6 +27,20 @@
 ### 餐厅搜索
 - `search_restaurant(城市, 菜系, 价格)` → 候选列表
 
+### 位置与天气工具（来自高德地图 MCP, 接了 amap_client 时可用）
+- `geocode(地址)` → 经纬度 (lng, lat) + formatted_address. 用户说"我在 XX"时用
+- `regeocode(lng, lat)` → 地址. 已知坐标想知道是哪儿时用
+- `search_around(lng, lat, 关键词, radius?)` → 周边 POI. "附近 2km 的川菜" 时用, 返回餐厅名+地址+距离
+- `weather(城市)` → 天气. "下雨天" / "今天热" 时用, 决定推荐汤面还是冰粉
+- `route(起点, 终点, mode?)` → 距离+时间. "步行能到吗" / "开车多久" 时用, mode = walking/bicycling/driving/transit
+
+**典型用法**: 用户说"我在北京海淀, 找附近 2km 的川菜, 一个人" →
+1. `geocode("北京海淀")` → 拿到 (lng, lat)
+2. `search_around(lng, lat, "川菜", radius=2000)` → 拿到附近餐厅
+3. `route(用户坐标, 餐厅坐标, "walking")` → 步行时间
+4. 把这些信息塞进 `consult_sichuan(user_query, context=...)` 的 context
+5. 综合输出含位置 + 距离 + 步行时间
+
 ## 工作流程
 
 1. **理解**：调用相关分析器收集约束（不必 8 个全调）
