@@ -12,6 +12,7 @@ Phase 2.2: 从 cuisines.yaml 动态加载所有菜系专家.
 """
 from __future__ import annotations
 
+import importlib
 import inspect
 import logging
 import sys
@@ -41,8 +42,13 @@ def _discover_cuisine_classes(
     Note:
         用 sys.modules 而不是 pkgutil.iter_modules, 这样:
         1) 测试可动态注入 fake module
-        2) 子模块只需被 import 过 (正常情况下 package import 时已自动完成)
+        2) 子模块只需被 import 过 (cuisines/__init__.py 主动 import 所有子模块)
+
+        这里必须先 import 一次包, 确保 cuisines/__init__.py 的
+        "主动 import 所有子模块" 副作用生效, 否则 sys.modules
+        里没东西可扫.
     """
+    importlib.import_module(pkg_name)
     found: dict[str, type[BaseCuisineAgent]] = {}
     prefix = pkg_name + "."
 

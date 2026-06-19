@@ -4,7 +4,7 @@
 >
 > 更新规则：每次完成一个 Phase / 修完一个 bug，**直接改这里**，然后在 git commit 一起提交。
 
-最后更新: 2026-06-18
+最后更新: 2026-06-19
 
 ---
 
@@ -17,8 +17,9 @@
 | qwen-agent tool_call_id bug fix | ✅ 已修 | `src/food_agent/llm.py` 启动时 patch |
 | Phase 2 (多菜系 + 记忆) | ✅ 完成 | 5 个子任务全部 commit |
 | **Phase 3.1 (高德地图 MCP)** | ✅ 完成 | commit `02bbf87`, 3 个子任务 |
-| **Phase 3.2 (3 维分析器)** | ✅ 完成 | commit TBD, 3 个 analyzer tool |
-| 测试 | ✅ 222 个全过 | 整体覆盖率 83.88% |
+| **Phase 3.2 (3 维分析器)** | ✅ 完成 | commit `57d6937`, 3 个 analyzer tool |
+| **Phase 3.3 (补齐 13 菜系)** | ✅ 完成 | commit TBD, 13 菜系 × 3 文件 + 160 测试 |
+| 测试 | ✅ 382 个全过 | 整体覆盖率 83.88% (新增 160 测试) |
 
 ---
 
@@ -173,9 +174,51 @@ with AmapClient() as amap:  # 默认 mock 模式 (或读 .env)
 - Regex 字符类 `[北京]` 只匹配单字符, 要 alternation `[北京|上海|...]`
 - "我在北京" vs "今天北京": `(?:在|...)` 前缀要可空, 避免误匹配
 
-### 3.3 补齐菜系 (用户 Phase 2 明确不要, 重新评估)
-- 必做 8 大: 粤 / 鲁 / 苏 / 浙 / 闽 / 湘 / 徽
-- 复用 2.3 模板
+### 3.3 补齐菜系 ✅ 完成
+
+**所有 13 个菜系独立文件, 复用 Phase 2.3 模板 (prompt .md + knowledge .md + agent .py)**:
+
+| 菜系 | 性格人物 | 特色 emoji | 代表菜 |
+|---|---|---|---|
+| 粤菜 cantonese | 何伯（广州西关老饕） | 🦐 鲜度 | 白切鸡、烧鹅、老火汤、早茶虾饺 |
+| 鲁菜 shandong | 鲁师傅（济南人） | 🧂 咸度 | 糖醋鲤鱼、九转大肠、葱烧海参 |
+| 苏菜 jiangsu | 沈先生（扬州文人） | 🍃 浓淡 | 蟹粉狮子头、松鼠鳜鱼、扬州炒饭 |
+| 浙菜 zhejiang | 杭伯（杭州人） | 🌱 鲜甜 | 西湖醋鱼、龙井虾仁、东坡肉 |
+| 闽菜 fujian | 林伯（福州马尾渔民） | 🦪 鲜度 | 佛跳墙、海蛎煎、沙茶面 |
+| 湘菜 hunan | 毛家阿婆（长沙坡子街） | 🌶️ 辣度 | 剁椒鱼头、毛氏红烧肉、辣椒炒肉 |
+| 徽菜 anhui | 胡掌柜（徽州歙县） | 🧀 油度 | 臭鳜鱼、火腿炖甲鱼、毛豆腐 |
+| 日料 japanese | 佐藤先生（京都老职人） | 🍣 鲜度 | 寿司、刺身、怀石、天妇罗、拉面 |
+| 西餐 western | Jean-Pierre（巴黎侍酒师） | 🥩 火候 | 牛排、鹅肝、生蚝、惠灵顿 |
+| 西式快餐 western_fastfood | 麦麦叔（前麦当劳经理） | 🍔 套餐 | 巨无霸、原味鸡、必胜客披萨 |
+| 中式快餐 chinese_fastfood | 老张（CBD 拉面老板） | 🍜 主食 | 沙县拌面、兰州拉面、黄焖鸡 |
+| 小吃 snack | 夜行阿杰（20 年夜市） | 🥟 品类 | 各地代表小吃 + 夜宵 |
+| 甜品饮品 dessert_drink | 小甜（小红书 10w 粉） | 🍰 品类 | 喜茶、瑞幸、糖水、烘焙 |
+
+**新增文件 (39 个)**:
+- `src/food_agent/agents/cuisines/<id>.py` × 13 (每个 30 行, 照 sichuan.py 模板)
+- `src/food_agent/config/prompts/<id>_v1.md` × 13 (每个 50-60 行)
+- `src/food_agent/data/cuisines/<id>.md` × 13 (每个 50-65 行)
+- `tests/test_all_cuisines.py` (160 测试, 覆盖元数据/prompt 加载/knowledge 加载/describe/recommend/fallback/yaml 一致性)
+- `examples/all_cuisines_smoke.py` (端到端 smoke)
+- `src/food_agent/agents/cuisines/__init__.py` (新增, eager import 所有子模块)
+- `tests/__init__.py` (新增, 让 `from tests.X import Y` 可用)
+
+**改动**:
+- `src/food_agent/registry.py` — `_discover_cuisine_classes()` 主动 import cuisines 包, 确保子模块加载
+
+**关键设计点**:
+- **性格人物差异化**: 13 个菜系 13 个不同人物, 跟老陈(川菜)地区/方言/专长都不重叠
+- **emoji 反映菜系特色**: 川菜 🌶️(辣度)/粤 🦐(鲜度)/鲁 🧂(咸度)/苏 🍃(浓淡)/浙 🌱(鲜甜)/闽 🦪(海味)/湘 🌶️(辣)/徽 🧀(油度)/日 🍣(鲜度)/西 🥩(火候)
+- **真实餐厅**: 包含陶陶居/利苑/丰泽园/冶春/楼外楼/聚春园/玉楼东/同庆楼/鮨一/莫尔顿/麦当劳等
+- **覆盖 8 维分析**: 每个 prompt 的"能力"段都对接价格/口味/天气/心情/场景/时段/位置/饮食限制
+- **慎选互补**: 粤菜"重口味嗜辣者→改推湘川"、湘菜"怕辣→改推粤苏浙"形成互补矩阵
+- **西餐明确排除快餐**: western.py 顶部 docstring/prompt/知识库多处写明"必胜客/麦当劳/肯德基不算西餐"
+- **场景导向非味道导向** (快餐/小吃/饮品): 突出"赶时间/夜宵/下午茶/解辣", 不是"商务宴请"
+
+**踩坑**:
+1. `cuisines/` 包没有 `__init__.py`, registry 扫不到子模块 → 加 `__init__.py` 用 pkgutil 主动 import + registry 主动 import 包
+2. `tests/` 同样没 `__init__.py`, `from tests.X import Y` 失败 → 加 `__init__.py` (空文件)
+3. smoke test 必须 `PYTHONIOENCODING=utf-8` (Windows GBK console 中文乱码)
 
 ### 3.4 接外卖平台（接了 location 后, 这是下一步）
 - 美团 / 饿了么 (H5 跳转 → 路径 B, 推荐)
@@ -199,7 +242,7 @@ with AmapClient() as amap:  # 默认 mock 模式 (或读 .env)
 
 | 设计目标 | 当前状态 | 距离 |
 |---|---|---|
-| 14 个菜系专家 | 1 个 (SichuanAgent) | 缺 13 个 (Phase 3.3) |
+| 14 个菜系专家 | ✅ 14 个 (川粤鲁苏浙闽湘徽 + 日料西餐 + 快餐×2 + 小吃 + 饮品) | 全部完成 (Phase 3.3) |
 | 8 维分析器 | 0 个 (`agents/analyzers/` 空) | 缺 8 个 (Phase 3.2) |
 | 短期记忆 | ✅ 完成 | — |
 | 长期记忆 | ✅ 完成 (keyword 召回) | FTS5 升级 (Phase 3.6) |
