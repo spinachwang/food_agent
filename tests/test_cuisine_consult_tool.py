@@ -20,12 +20,13 @@ def test_tool_has_unique_name_per_cuisine() -> None:
 
 
 def test_tool_has_valid_parameters() -> None:
-    """工具参数符合 qwen-agent 规范."""
+    """工具参数符合 OpenAI JSON Schema 规范 (use_raw_api=True 时会原样发)."""
     tool = CuisineConsultTool(_make_agent(["ok"]))
-    assert isinstance(tool.parameters, list)
-    param_names = {p["name"] for p in tool.parameters}
-    assert "user_query" in param_names
-    assert any(p.get("required") for p in tool.parameters)
+    assert isinstance(tool.parameters, dict)
+    assert tool.parameters["type"] == "object"
+    assert "properties" in tool.parameters
+    assert "user_query" in tool.parameters["properties"]
+    assert "user_query" in tool.parameters.get("required", [])
 
 
 def test_tool_call_invokes_underlying_agent() -> None:

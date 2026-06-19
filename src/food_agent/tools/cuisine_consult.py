@@ -26,22 +26,24 @@ class CuisineConsultTool(BaseTool):
     """
 
     # 类属性默认值, 实际在 __init__ 中覆盖
+    # 注意: parameters 用 OpenAI 标准 JSON Schema (dict), 不是 Qwen 老 list 格式
+    # 因为 use_raw_api=True 时会原样发给 OpenAI 兼容 API
     name: str = "consult_cuisine"
     description: str = "咨询菜系专家"
-    parameters: list[dict[str, Any]] = [
-        {
-            "name": "user_query",
-            "type": "string",
-            "description": "用户想了解的内容",
-            "required": True,
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "user_query": {
+                "type": "string",
+                "description": "用户想了解的内容",
+            },
+            "context": {
+                "type": "string",
+                "description": "8 维分析器产出的约束 (JSON 文本)",
+            },
         },
-        {
-            "name": "context",
-            "type": "string",
-            "description": "8 维分析器产出的约束 (JSON 文本)",
-            "required": False,
-        },
-    ]
+        "required": ["user_query"],
+    }
 
     def __init__(
         self,

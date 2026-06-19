@@ -5,7 +5,7 @@ environment: development
 
 llm:
   provider: openai_compatible       # qwen-agent 的 model_type
-  model: MiniMax-Text-01
+  model: MiniMax-M3
   base_url: https://api.minimaxi.com/v1
   max_tokens: 4096
   temperature: 0.7
