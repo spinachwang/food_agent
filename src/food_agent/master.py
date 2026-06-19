@@ -7,19 +7,24 @@
 
 Phase 2 接入:
 - 默认菜系从 cuisines.yaml 动态加载 (Phase 1 硬编码 SichuanAgent)
+- 短期记忆 (session_id) - 多轮上下文保持
+- 长期记忆 (long_term + user_id) - 偏好召回 + 推荐历史
 - 行为兼容: 默认 fallback 文本与 Phase 1 一致
-- 显式传 cuisine_agents 时不走 registry
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from food_agent.agents.base import BaseCuisineAgent
 from food_agent.exceptions import LLMError
 from food_agent.llm import get_llm_cfg
+from food_agent.memory.long_term import LongTermMemory
 from food_agent.memory.short_term import ShortTermMemory
 from food_agent.tools.cuisine_consult import CuisineConsultTool
+
+logger = logging.getLogger(__name__)
 
 # Master system prompt 路径
 _PACKAGE_DIR = Path(__file__).resolve().parent
@@ -54,6 +59,7 @@ class FoodAgent:
         cuisine_agents: list[BaseCuisineAgent] | None = None,
         system_prompt: str | None = None,
         max_rounds: int = 10,
+        long_term: LongTermMemory | None = None,
     ) -> None:
         """初始化.
 
@@ -62,6 +68,7 @@ class FoodAgent:
             cuisine_agents: 菜系 agent 列表. None 时从 cuisines.yaml 动态加载.
             system_prompt: 覆盖默认 master prompt.
             max_rounds: 最大调度轮数, 防止死循环.
+            long_term: 长期记忆 (Phase 2.6). None 时无持久化.
         """
         self.llm = llm if llm is not None else get_llm_cfg()
         self.cuisine_agents: list[BaseCuisineAgent] = (
@@ -69,6 +76,7 @@ class FoodAgent:
         )
         self.system_prompt = system_prompt or _load_master_prompt()
         self.max_rounds = max_rounds
+        self._long_term = long_term
 
         # 每个菜系包成 tool
         self.tools: list[CuisineConsultTool] = [
@@ -120,10 +128,28 @@ class FoodAgent:
             self._short_term_by_session[session_id] = stm
         return stm
 
+    def _recall_preferences_text(self, user_id: str, query: str) -> str:
+        """召回用户偏好, 拼成 system message 文本. 失败 → ''"""
+        if not self._long_term:
+            return ""
+        try:
+            prefs = self._long_term.recall_for_query(user_id, query, top_k=3)
+        except Exception as e:
+            logger.warning("recall_for_query failed: %s", e)
+            return ""
+        if not prefs:
+            return ""
+        lines = [
+            f"- {p.key}: {p.value} (confidence={p.confidence:.2f})"
+            for p in prefs
+        ]
+        return "## 用户偏好 (从长期记忆召回)\n" + "\n".join(lines)
+
     def run(
         self,
         user_msg: str,
         session_id: str | None = None,
+        user_id: str = "default",
         history: list[dict] | None = None,
     ) -> str:
         """运行主流程.
@@ -131,6 +157,7 @@ class FoodAgent:
         Args:
             user_msg: 用户消息.
             session_id: 会话 ID (Phase 2.5 短期记忆). 传 None 则无记忆 (Phase 1 行为).
+            user_id: 用户 ID (Phase 2.6 长期记忆偏好召回/记录). 默认 "default".
             history: 显式历史消息 (可选, 优先级高于 session_id).
 
         Returns:
@@ -140,17 +167,23 @@ class FoodAgent:
             return "（老饕听着呢, 你想吃啥？）"
 
         # 决定消息列表来源
+        messages: list[dict] = []
+
+        # 1. 长期记忆偏好召回 (作为 system message 注入到 messages 最前)
+        if self._long_term and history is None:
+            prefs_text = self._recall_preferences_text(user_id, user_msg)
+            if prefs_text:
+                messages.append({"role": "system", "content": prefs_text})
+
+        # 2. 短期记忆 history (summary + 最近消息)
         if history is not None:
-            # 显式传 history 优先
-            messages: list[dict] = list(history)
-            messages.append({"role": "user", "content": user_msg})
+            messages.extend(list(history))
         elif session_id:
             stm = self._get_or_create_stm(session_id)
-            # 注入历史 (summary + 最近消息)
-            messages = stm.get_messages()
-            messages.append({"role": "user", "content": user_msg})
-        else:
-            messages = [{"role": "user", "content": user_msg}]
+            messages.extend(stm.get_messages())
+
+        # 3. 用户消息
+        messages.append({"role": "user", "content": user_msg})
 
         try:
             responses = list(self._assistant.run(messages, **self._assistant_call_kwargs()))
@@ -185,8 +218,18 @@ class FoodAgent:
                 try:
                     stm.summarize(self.llm)
                 except Exception as e:  # 摘要失败不挂上层
-                    import logging
-                    logging.getLogger(__name__).warning("summarize failed: %s", e)
+                    logger.warning("summarize failed: %s", e)
+
+        # 记录到长期记忆 (fail-soft)
+        if self._long_term and history is None:
+            try:
+                self._long_term.record_recommendation(
+                    session_id=session_id,
+                    user_msg=user_msg,
+                    result=response,
+                )
+            except Exception as e:
+                logger.warning("record_recommendation failed: %s", e)
 
         return response
 
