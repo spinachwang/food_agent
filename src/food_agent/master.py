@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from food_agent.agents.analyzers import list_analyzer_tools
 from food_agent.agents.base import BaseCuisineAgent
 from food_agent.exceptions import LLMError
 from food_agent.llm import get_llm_cfg
@@ -70,6 +71,7 @@ class FoodAgent:
         max_rounds: int = 10,
         long_term: LongTermMemory | None = None,
         amap_client: AmapClient | None = None,
+        enable_analyzers: bool = True,
     ) -> None:
         """初始化.
 
@@ -80,8 +82,7 @@ class FoodAgent:
             max_rounds: 最大调度轮数, 防止死循环.
             long_term: 长期记忆 (Phase 2.6). None 时无持久化.
             amap_client: 高德地图 MCP client (Phase 3.1). None 时无 location 工具.
-                      传了之后 5 个 location tool 自动加入 (geocode/regeocode/
-                      search_around/weather/route), 共享此 client.
+            enable_analyzers: 是否启用 3 维分析器 (Phase 3.2). 默认 True.
         """
         self.llm = llm if llm is not None else get_llm_cfg()
         self.cuisine_agents: list[BaseCuisineAgent] = (
@@ -110,6 +111,10 @@ class FoodAgent:
                 WeatherTool(),
                 RouteTool(),
             ])
+
+        # 加 3 维分析器 tools (Phase 3.2). dietary 注入 long_term 用于查已知偏好.
+        if enable_analyzers:
+            self.tools.extend(list_analyzer_tools(long_term=long_term))
 
         # 构造 qwen-agent Assistant
         self._assistant = self._build_assistant()

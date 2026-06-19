@@ -16,8 +16,9 @@
 | Phase 1 (单菜系 E2E) | ✅ 完成 | commit `034cfca` |
 | qwen-agent tool_call_id bug fix | ✅ 已修 | `src/food_agent/llm.py` 启动时 patch |
 | Phase 2 (多菜系 + 记忆) | ✅ 完成 | 5 个子任务全部 commit |
-| **Phase 3.1 (高德地图 MCP)** | ✅ 完成 | 3 个子任务, 真 key 跑通 |
-| 测试 | ✅ 197 个全过 | 整体覆盖率 85%+ |
+| **Phase 3.1 (高德地图 MCP)** | ✅ 完成 | commit `02bbf87`, 3 个子任务 |
+| **Phase 3.2 (3 维分析器)** | ✅ 完成 | commit TBD, 3 个 analyzer tool |
+| 测试 | ✅ 222 个全过 | 整体覆盖率 83.88% |
 
 ---
 
@@ -135,12 +136,42 @@ with AmapClient() as amap:  # 默认 mock 模式 (或读 .env)
 
 ## Phase 3 任务清单（推荐顺序）
 
-### 3.1 高德地图 MCP ✅ 完成
-### 3.2 8 维分析器 (`agents/analyzers/`) 🚧 下一个
-- `analyze_price / analyze_taste / analyze_weather / analyze_mood / analyze_occasion / analyze_time / analyze_location / analyze_dietary`
-- 类似菜系, 继承 `BaseAnalyzer` 抽象
-- 注册到 `cuisines.yaml` 同款 yaml
-- **analyze_weather / analyze_location 可直接调 location tool**
+### 3.1 高德地图 MCP ✅ 完成 (`02bbf87`)
+### 3.2 3 维分析器 ✅ 完成
+**精简决策**: 原 8 维里只有 3 个真正需要 tool, 其余让 master LLM 在 system prompt 里直接分析 (避免冗余).
+
+**只做的 3 个 analyzer**:
+
+| Analyzer | 必要性 | 实现 |
+|---|---|---|
+| `analyze_weather` | ✅ 必须 (外部数据) | 调 amap `maps_weather` + 规则推导饮食建议 |
+| `analyze_location` | ✅ 必须 (外部数据) | 优先 `maps_ip_location` (web 场景), 降级到 `maps_geo` (CLI 场景) |
+| `analyze_dietary` | ✅ 必须 (安全关键) | 硬约束 (过敏/宗教) 100% 排除 + 软偏好 + 长期记忆整合 |
+| ~~price/taste/mood/occasion/time~~ | ❌ LLM 自做 | 价格/口味/情绪/场合/时间, LLM 直接从消息抽取 |
+
+**新增文件**:
+- `src/food_agent/agents/analyzers/__init__.py` — `list_analyzer_tools()` 工厂
+- `src/food_agent/agents/analyzers/base.py` — `_AnalyzerToolBase` 公共基类
+- `src/food_agent/agents/analyzers/weather.py` — `WeatherAnalyzerTool`
+- `src/food_agent/agents/analyzers/location.py` — `LocationAnalyzerTool`
+- `src/food_agent/agents/analyzers/dietary.py` — `DietaryAnalyzerTool` (含 long_term 整合)
+- `tests/test_analyzers.py` — 20 个测试
+- `examples/analyzer_master_smoke.py` — 端到端验证
+
+**改动**:
+- `AmapClient` 加 `ip_location()` 方法
+- `master.py` 加 `enable_analyzers=True` 参数, 默认注入 3 个 analyzer
+- `master_v1.md` 精简: 8 维 → 3 维, 5 个 LLM 自做维度列在 prompt 里
+- `test_master_agent.py` 更新 (analyzer tool 不是 CuisineConsultTool)
+
+**Dietary 关键设计**:
+- 硬约束 (过敏/宗教) 必须 100% 排除, 不能 LLM 推测
+- 软偏好 regex 匹配 `不爱吃|不喜欢|不爱|不吃|不要|讨厌|嫌|拒绝`
+- 整合 long_term: key 以 `allergy_/no_/religion_/avoid_` 开头的视为已知偏好
+
+**踩坑**:
+- Regex 字符类 `[北京]` 只匹配单字符, 要 alternation `[北京|上海|...]`
+- "我在北京" vs "今天北京": `(?:在|...)` 前缀要可空, 避免误匹配
 
 ### 3.3 补齐菜系 (用户 Phase 2 明确不要, 重新评估)
 - 必做 8 大: 粤 / 鲁 / 苏 / 浙 / 闽 / 湘 / 徽

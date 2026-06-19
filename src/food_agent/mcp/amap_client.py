@@ -112,8 +112,8 @@ class AmapClient:
             {"name": "maps_direction_driving", "description": "驾车路径规划"},
             {"name": "maps_direction_transit_integrated", "description": "公交路径规划"},
             {"name": "maps_weather", "description": "天气查询"},
-            {"name": "maps_distance", "description": "测距"},
             {"name": "maps_ip_location", "description": "IP 定位"},
+            {"name": "maps_distance", "description": "测距"},
             {"name": "maps_schema", "description": "数据表查询"},
         ]
 
@@ -349,6 +349,34 @@ class AmapClient:
             logger.warning("amap list_tools failed: %s", e)
             return []
 
+    def ip_location(self, ip: str | None = None) -> dict[str, Any]:
+        """IP 定位 → 城市/省份. Web 场景自动定位用.
+
+        Args:
+            ip: 客户端 IP. None 时由高德根据请求头自动获取 (需 HTTP context).
+
+        Returns:
+            {province, city, adcode}. 失败 → {}.
+        """
+        cache_key = f"ip_location:{ip or 'self'}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            if self.use_mock:
+                result = self._mock_ip_location(ip)
+            else:
+                args: dict[str, Any] = {}
+                if ip:
+                    args["ip"] = ip
+                result = self._call_mcp_tool("maps_ip_location", args)
+        except Exception as e:
+            logger.warning("amap ip_location failed: %s", e)
+            return {}
+        if result:
+            self._cache_set(cache_key, result)
+        return result
+
     # =================================================================
     # 真模式: 调 MCP SDK
     # =================================================================
@@ -466,6 +494,15 @@ class AmapClient:
             "temperature": "25",
             "windDirection": "南",
             "windPower": "≤3级",
+        }
+
+    def _mock_ip_location(self, ip: str | None) -> dict[str, Any]:
+        """mock IP 定位: 默认返回北京."""
+        return {
+            "province": "北京市",
+            "city": "北京",
+            "adcode": "110000",
+            "rectangle": "116.011934,39.661271;116.782983,40.216496",
         }
 
     def _mock_route(

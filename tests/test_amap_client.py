@@ -385,3 +385,60 @@ def test_list_tools_mock_returns_list(client: AmapClient) -> None:
     # 包含核心 tool
     assert any("geo" in n for n in names)  # maps_geo / maps_geocode
     assert any("weather" in n or "search" in n for n in names)
+
+
+# =============================================================================
+# IP 定位 (Phase 3.2)
+# =============================================================================
+
+def test_ip_location_mock_returns_dict(client: AmapClient) -> None:
+    """mock ip_location 返回 dict 含 city / province."""
+    result = client.ip_location()
+    assert isinstance(result, dict)
+    # 至少含 city
+    assert "city" in result
+    text = json.dumps(result, ensure_ascii=False)
+    # 应有城市名
+    assert "北京" in text or "city" in result
+
+
+def test_ip_location_with_ip_param(client: AmapClient) -> None:
+    """显式传 IP 也走 mock."""
+    result = client.ip_location(ip="114.114.114.114")
+    assert isinstance(result, dict)
+    assert "city" in result
+
+
+def test_ip_location_caches_results(client: AmapClient, monkeypatch) -> None:
+    """同 IP 二次调用 → 缓存命中."""
+    call_count = 0
+    original = client._mock_ip_location
+
+    def counting(ip):
+        nonlocal call_count
+        call_count += 1
+        return original(ip)
+
+    monkeypatch.setattr(client, "_mock_ip_location", counting)
+    client.ip_location("8.8.8.8")
+    client.ip_location("8.8.8.8")
+    assert call_count == 1
+
+
+def test_ip_location_failure_returns_empty(monkeypatch) -> None:
+    """mock 内部 raise → {}."""
+    client = AmapClient()
+
+    def _explode(ip):
+        raise RuntimeError("network")
+
+    monkeypatch.setattr(client, "_mock_ip_location", _explode)
+    result = client.ip_location("8.8.8.8")
+    assert result == {}
+
+
+def test_list_tools_mock_includes_ip_location(client: AmapClient) -> None:
+    """mock list_tools 包含 maps_ip_location."""
+    tools = client.list_tools()
+    names = [t["name"] if isinstance(t, dict) else t.name for t in tools]
+    assert "maps_ip_location" in names

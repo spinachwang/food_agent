@@ -17,12 +17,18 @@ def test_food_agent_loads_default_cuisines() -> None:
 
 
 def test_food_agent_builds_tools_from_agents() -> None:
-    """每个菜系 agent 对应一个 consult tool."""
+    """每个菜系 agent 对应一个 consult tool, + 3 个 analyzer tool (Phase 3.2)."""
     llm = FakeLLM(["ok"])
     agent = FoodAgent(llm=llm)
     tool_names = {t.name for t in agent.tools}
     assert "consult_sichuan" in tool_names
-    assert all(isinstance(t, CuisineConsultTool) for t in agent.tools)
+    # analyzer tool (Phase 3.2) 也应自动加入
+    assert "analyze_weather" in tool_names
+    assert "analyze_location" in tool_names
+    assert "analyze_dietary" in tool_names
+    # consult_* 类 tool 都是 CuisineConsultTool
+    consult_tools = [t for t in agent.tools if t.name.startswith("consult_")]
+    assert all(isinstance(t, CuisineConsultTool) for t in consult_tools)
 
 
 def test_food_agent_loads_master_prompt() -> None:
