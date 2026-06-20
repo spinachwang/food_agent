@@ -25,7 +25,7 @@ def test_run_once_with_mock(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Capt
     """_run_once() 接受 mock LLM 时不崩, 输出非空."""
     monkeypatch.setattr(
         cli, "_build_agent",
-        lambda mock=False: FoodAgent(llm=FakeLLM(["推荐川菜-麻婆豆腐"])),
+        lambda **kwargs: FoodAgent(llm=FakeLLM(["推荐川菜-麻婆豆腐"])),
     )
     rc = cli._run_once("test", mock=True)
     assert rc == 0
@@ -42,7 +42,7 @@ def test_run_once_handles_food_agent_error(
         def run(self, *args, **kwargs):
             raise FoodAgentError("API down")
 
-    monkeypatch.setattr(cli, "_build_agent", lambda mock=False: FailingAgent())
+    monkeypatch.setattr(cli, "_build_agent", lambda **kwargs: FailingAgent())
     rc = cli._run_once("test", mock=True)
     assert rc == 1
     err = capsys.readouterr().err
@@ -55,9 +55,45 @@ def test_build_agent_with_mock() -> None:
     assert isinstance(agent, FoodAgent)
 
 
+def test_build_agent_default_has_long_term(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认情况下 _build_agent 应启用 long_term, db 写到指定路径."""
+    monkeypatch.setattr(cli, "_DEFAULT_DB_PATH", tmp_path / "default.db")
+    agent = cli._build_agent(mock=True)
+    assert agent._long_term is not None
+    assert Path(agent._long_term._db_path) == tmp_path / "default.db"
+
+
+def test_build_agent_no_memory_flag() -> None:
+    """--no-memory 时 long_term = None (Phase 1 兼容行为)."""
+    agent = cli._build_agent(mock=True, no_memory=True)
+    assert agent._long_term is None
+
+
+def test_build_agent_custom_db_path(tmp_path: Path) -> None:
+    """--memory-db PATH 改默认 db 路径."""
+    db = tmp_path / "custom.db"
+    agent = cli._build_agent(mock=True, db_path=str(db))
+    assert agent._long_term is not None
+    assert Path(agent._long_term._db_path) == db
+
+
+def test_build_agent_creates_parent_dir(tmp_path: Path) -> None:
+    """db 父目录不存在时自动创建 (sqlite3.connect 需要)."""
+    db = tmp_path / "nested" / "dir" / "memory.db"
+    assert not db.parent.exists()
+    cli._build_agent(mock=True, db_path=str(db))
+    assert db.parent.exists()
+
+
+def test_default_db_path_is_under_project_root() -> None:
+    """_DEFAULT_DB_PATH 应在项目根 (不是 src/), 含 data/food_agent.db."""
+    expected = Path(__file__).resolve().parent.parent / "data" / "food_agent.db"
+    assert cli._DEFAULT_DB_PATH == expected
+
+
 def test_main_routes_to_repl_when_no_query(monkeypatch: pytest.MonkeyPatch) -> None:
     """main() 无 query 时走 REPL (mock REPL 立即返回)."""
-    monkeypatch.setattr(cli, "_run_repl", lambda mock=False: 0)
+    monkeypatch.setattr(cli, "_run_repl", lambda **kwargs: 0)
     rc = cli.main(["--mock"])
     assert rc == 0
 
@@ -65,7 +101,7 @@ def test_main_routes_to_repl_when_no_query(monkeypatch: pytest.MonkeyPatch) -> N
 def test_main_routes_to_repl_when_chat_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     """main() --chat 时走 REPL."""
     called = {"repl": False, "once": False}
-    monkeypatch.setattr(cli, "_run_repl", lambda mock=False: (called.__setitem__("repl", True) or 0))
+    monkeypatch.setattr(cli, "_run_repl", lambda **kwargs: (called.__setitem__("repl", True) or 0))
     monkeypatch.setattr(cli, "_run_once", lambda *a, **k: (called.__setitem__("once", True) or 0))
     cli.main(["--chat", "--mock"])
     assert called["repl"] is True
@@ -78,10 +114,10 @@ def test_main_with_query_routes_to_once(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(
         cli, "_run_repl",
-        lambda mock=False: (called.__setitem__("repl", True) or 0),
+        lambda **kwargs: (called.__setitem__("repl", True) or 0),
     )
 
-    def fake_once(query, mock=False):
+    def fake_once(query, **kwargs):
         called["query"] = query
         called["once"] = True
         return 0
