@@ -546,3 +546,37 @@ def test_foodagent_auto_save_fails_soft_on_long_term_error(tmp_path) -> None:
     # 不抛
     result = agent.run("我对花生过敏", user_id="dave")
     assert "ok" in result
+
+
+# =============================================================================
+# Phase B-1 bug: REPL 模式传 history= 时 LTM 完全 skip
+# =============================================================================
+
+def test_foodagent_auto_save_works_with_explicit_history(tmp_path) -> None:
+    """REPL 模式 (传 history=list) 时, auto_save 仍应工作.
+
+    Bug 复现: 原条件 'if self._long_term and history is None:' 把 history
+    传入时整个 LTM 写入 block skip 掉. CLI REPL 用 history= 维持短期记忆,
+    但 LTM (record_recommendation + _persist_dietary_preferences) 跟 history
+    无关, 应独立工作.
+    """
+    from food_agent.master import FoodAgent
+    from food_agent.memory.long_term import LongTermMemory
+
+    db = tmp_path / "ltm.db"
+    with LongTermMemory(db) as ltm:
+        fake = FakeLLM(["ok", "ok"])
+        agent = FoodAgent(llm=fake, long_term=ltm)  # type: ignore[arg-type]
+        # 模拟 REPL: 第一轮 history=[] (空), 第二轮 history 累积
+        agent.run("我对花生过敏", user_id="eve", history=[])
+        agent.run(
+            "我不喜欢甜的",
+            user_id="eve",
+            history=[
+                {"role": "user", "content": "第一轮消息"},
+                {"role": "assistant", "content": "第一轮回复"},
+            ],
+        )
+        prefs = ltm.get_preferences("eve")
+        keys = sorted([p.key for p in prefs])
+        assert keys == ["allergy_花生", "avoid_甜"], f"expected 2 prefs, got {keys}"

@@ -294,7 +294,9 @@ class FoodAgent:
                     logger.warning("summarize failed: %s", e)
 
         # 记录到长期记忆 (fail-soft)
-        if self._long_term and history is None:
+        # 注: 不受 history 影响 — REPL 用 history= 维持短期记忆,
+        # 但 LTM (推荐历史 + 偏好) 只关心 user_msg, 应独立工作.
+        if self._long_term:
             try:
                 self._long_term.record_recommendation(
                     session_id=session_id,
