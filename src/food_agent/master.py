@@ -33,6 +33,7 @@ from food_agent.tools.location import (
     WeatherTool,
     set_amap_client as _set_amap_client,
 )
+from qwen_agent.llm import get_chat_model  # Phase B-2: dict LLM → 实例包装
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,27 @@ def _load_master_prompt(path: Path | None = None) -> str:
         # 降级: 内置简化版
         return "你是地球顶级美食家, 精通各菜系, 善于根据用户喜好推荐餐厅和菜品."
     return p.read_text(encoding="utf-8").strip()
+
+
+def _resolve_llm_instance(llm: Any) -> Any:
+    """把 qwen-agent LLM config dict 包装成 BaseChatModel 实例.
+
+    qwen-agent 接受两种 LLM 形态:
+    - dict: model/model_server/api_key/generate_cfg 配置
+    - BaseChatModel: 已构造好的实例 (含 .chat() 方法)
+
+    CLI 默认用 get_llm_cfg() 返 dict, 传给 dietary 等工具会失败 (dict 没 .chat).
+    此函数在 init 时包装一次, 所有 tool 都用 BaseChatModel.
+
+    Args:
+        llm: dict 配置 OR BaseChatModel 实例 OR 测试用 mock.
+
+    Returns:
+        BaseChatModel 实例 (有 .chat() 方法). 已是实例时原样返回.
+    """
+    if isinstance(llm, dict):
+        return get_chat_model(llm)
+    return llm
 
 
 class FoodAgent:
@@ -84,7 +106,11 @@ class FoodAgent:
             amap_client: 高德地图 MCP client (Phase 3.1). None 时无 location 工具.
             enable_analyzers: 是否启用 3 维分析器 (Phase 3.2). 默认 True.
         """
-        self.llm = llm if llm is not None else get_llm_cfg()
+        # Phase B-2: self.llm 总是 BaseChatModel 实例 (or mock), 避免 dict 漏到
+        # qwen-agent Assistant.__init__ 内部 (它会自己 get_chat_model 包装, 失败).
+        self.llm = _resolve_llm_instance(
+            llm if llm is not None else get_llm_cfg()
+        )
         self.cuisine_agents: list[BaseCuisineAgent] = (
             cuisine_agents if cuisine_agents is not None else self._default_cuisines()
         )

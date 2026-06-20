@@ -133,3 +133,54 @@ def test_food_agent_repr() -> None:
     r = repr(agent)
     assert "FoodAgent" in r
     assert "cuisines" in r or "sichuan" in r
+
+
+# =============================================================================
+# Phase B-2 bugfix: dict LLM config 包装成 LLM 实例 (dietary 用)
+# =============================================================================
+
+def test_food_agent_dict_llm_wrapped_for_dietary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """master.llm 是 dict (qwen-agent config) 时, dietary tool 拿到 BaseChatModel 实例.
+
+    Bug: 之前 dietary._llm = dict, dict.chat() 不存在, 走 fallback keyword,
+    like_preferences 永远空. CLI 默认用 get_llm_cfg() 返 dict, 触发 bug.
+    """
+    # 模拟 dict config (不需要真 API key, 跑不到 chat 也能验)
+    from food_agent.llm import get_llm_cfg
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    # 用 FakeLLM 当 raw llm, 但 FoodAgent 拿 dict 形式, 验证内部包装
+    # 直接测: master.py 的 _resolve_llm_instance 函数
+    from food_agent.master import _resolve_llm_instance
+
+    fake_instance = FakeLLM(["ok"])
+    # dict 包装
+    # monkeypatch get_chat_model 避免真 API
+    from unittest.mock import patch
+
+    with patch("food_agent.master.get_chat_model", return_value=fake_instance) as m:
+        cfg = {"model": "fake", "model_server": "fake", "api_key": "fake"}
+        result = _resolve_llm_instance(cfg)
+        assert result is fake_instance
+        m.assert_called_once_with(cfg)
+
+    # 已经 BaseChatModel 风格的对象直接返回
+    assert _resolve_llm_instance(fake_instance) is fake_instance
+
+
+def test_food_agent_dietary_tool_receives_llm_instance() -> None:
+    """FoodAgent 初始化后, analyze_dietary 工具的 _llm 是可调 chat() 的对象.
+
+    端到端: dict LLM 也能让 dietary 走 LLM 抽取路径.
+    """
+    from unittest.mock import patch, MagicMock
+    from food_agent.llm import get_llm_cfg
+
+    fake_llm_instance = FakeLLM(["ok"])
+    cfg = {"model": "fake", "model_server": "fake", "api_key": "fake"}
+
+    with patch("food_agent.master.get_chat_model", return_value=fake_llm_instance):
+        agent = FoodAgent(llm=cfg)  # 传 dict, 模拟 CLI 默认
+        # 找 dietary tool
+        dietary = next(t for t in agent.tools if t.name == "analyze_dietary")
+        assert dietary._llm is fake_llm_instance  # 不是 dict!
