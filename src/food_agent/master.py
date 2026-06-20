@@ -112,9 +112,9 @@ class FoodAgent:
                 RouteTool(),
             ])
 
-        # 加 3 维分析器 tools (Phase 3.2). dietary 注入 long_term 用于查已知偏好.
+        # 加 3 维分析器 tools (Phase 3.2). dietary 注入 long_term + llm (Phase B-2 LLM 抽取)
         if enable_analyzers:
-            self.tools.extend(list_analyzer_tools(long_term=long_term))
+            self.tools.extend(list_analyzer_tools(long_term=long_term, llm=self.llm))
 
         # 构造 qwen-agent Assistant
         self._assistant = self._build_assistant()
@@ -181,10 +181,11 @@ class FoodAgent:
     def _persist_dietary_preferences(self, user_id: str, user_msg: str) -> None:
         """从 user_msg 抽取饮食限制并自动写入 long_term (Phase B).
 
-        调用 DietaryAnalyzerTool.analyze() (纯函数, 无 LLM 调用), 把
-        source == "msg" 的项写到 long_term. key 约定:
+        Phase B-2: 调用 DietaryAnalyzerTool.analyze() (优先 LLM, keyword 兜底),
+        把 source == "msg" 的项写到 long_term. key 约定:
         - 硬约束 (allergy/religion): key = "allergy_<value>" / "religion_<code>"
         - 软偏好 (avoid): key = "avoid_<value>"
+        - 喜欢偏好 (like): key = "like_<value>" (Phase B-2 新增)
 
         fail-soft: 任何异常 logger.warning + return, 不挂上层.
         """
@@ -192,9 +193,9 @@ class FoodAgent:
             return
         try:
             from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
-            result = DietaryAnalyzerTool(long_term=self._long_term).analyze(
-                user_msg, context={"user_id": user_id}
-            )
+            result = DietaryAnalyzerTool(
+                long_term=self._long_term, llm=self.llm,
+            ).analyze(user_msg, context={"user_id": user_id})
         except Exception as e:
             logger.warning("dietary auto-save: analyze failed: %s", e)
             return
@@ -213,6 +214,14 @@ class FoodAgent:
                     continue
                 self._long_term.save_preference(
                     user_id, f"avoid_{s['value']}", s["value"],
+                    confidence=0.7, source="explicit",
+                )
+            # Phase B-2: 喜欢偏好 (like)
+            for l in result.get("like_preferences", []):
+                if l.get("source") != "msg":
+                    continue
+                self._long_term.save_preference(
+                    user_id, f"like_{l['value']}", l["value"],
                     confidence=0.7, source="explicit",
                 )
         except Exception as e:

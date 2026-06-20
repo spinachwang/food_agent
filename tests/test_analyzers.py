@@ -296,6 +296,127 @@ def test_dietary_schema() -> None:
 
 
 # =============================================================================
+# Phase B-2: LLM 抽取 (替代 keyword 抽取)
+# =============================================================================
+
+class FakeLLM:
+    """LLM 抽取的 mock — 返回构造好的 JSON 字符串."""
+
+    def __init__(self, canned_response: str) -> None:
+        self.canned_response = canned_response
+        self.call_count = 0
+        self.last_prompt: str = ""
+
+    def chat(self, messages, functions=None, stream=True, **kwargs):
+        self.call_count += 1
+        # 拿 user message 当 prompt (qwen-agent Message 对象)
+        for m in messages:
+            content = getattr(m, "content", None) or (m.get("content") if isinstance(m, dict) else None)
+            if content:
+                self.last_prompt = content
+                break
+
+        from qwen_agent.llm.schema import Message as QMessage
+        def _gen():
+            yield [QMessage(role="assistant", content=self.canned_response)]
+        return _gen()
+
+
+def test_dietary_llm_extract_likes_spicy() -> None:
+    """LLM 抽取: '我喜欢吃辣' → like_辣 (keyword 抽不到, LLM 能)."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    fake = FakeLLM(
+        '{"hard_constraints": [], "soft_preferences": [], '
+        '"like_preferences": [{"type": "like", "value": "辣", '
+        '"should_prefer": true, "source": "msg"}], '
+        '"has_restrictions": false, "confidence": 0.85}'
+    )
+    tool = DietaryAnalyzerTool(llm=fake)
+    result = tool.analyze("我喜欢吃辣, 干辣尤其喜欢")
+
+    assert any(lp["value"] == "辣" for lp in result["like_preferences"])
+    assert result["has_restrictions"] is False  # 只有 like, 不算 restriction
+    assert fake.call_count == 1
+
+
+def test_dietary_llm_extract_mixed() -> None:
+    """LLM 抽: 三类偏好混合 (allergy + avoid + like) 一次抽齐."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    fake = FakeLLM(
+        '{"hard_constraints": [{"type": "allergy", "value": "花生", '
+        '"must_exclude": true, "source": "msg"}], '
+        '"soft_preferences": [{"type": "avoid", "value": "香菜", '
+        '"should_avoid": true, "source": "msg"}], '
+        '"like_preferences": [{"type": "like", "value": "辣", '
+        '"should_prefer": true, "source": "msg"}], '
+        '"has_restrictions": true, "confidence": 0.95}'
+    )
+    tool = DietaryAnalyzerTool(llm=fake)
+    result = tool.analyze("对花生过敏, 不爱吃香菜, 喜欢辣的")
+
+    assert any(h["value"] == "花生" for h in result["hard_constraints"])
+    assert any(s["value"] == "香菜" for s in result["soft_preferences"])
+    assert any(l["value"] == "辣" for l in result["like_preferences"])
+    assert result["has_restrictions"] is True
+
+
+def test_dietary_llm_extract_handles_implicit_preference() -> None:
+    """LLM 抽: '最近在减脂' 这种隐含偏好也能识别."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    fake = FakeLLM(
+        '{"hard_constraints": [], '
+        '"soft_preferences": [{"type": "avoid", "value": "油炸", '
+        '"should_avoid": true, "source": "msg"}, '
+        '{"type": "avoid", "value": "甜食", "should_avoid": true, "source": "msg"}], '
+        '"like_preferences": [], '
+        '"has_restrictions": true, "confidence": 0.8}'
+    )
+    tool = DietaryAnalyzerTool(llm=fake)
+    result = tool.analyze("最近在减脂, 油炸的和甜食都不想吃")
+
+    soft_vals = [s["value"] for s in result["soft_preferences"]]
+    assert "油炸" in soft_vals or "甜食" in soft_vals
+
+
+def test_dietary_llm_extract_falls_back_on_invalid_json() -> None:
+    """LLM 返回非 JSON → 降级到 keyword 抽取 (fail-soft)."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    fake = FakeLLM("invalid json {{{")
+    tool = DietaryAnalyzerTool(llm=fake)
+    # 不会抛, 应降级到 keyword 抽
+    result = tool.analyze("我对花生过敏")
+    # keyword 抽能识别花生 (allergy)
+    assert any(h["value"] == "花生" for h in result["hard_constraints"])
+
+
+def test_dietary_no_llm_uses_keyword() -> None:
+    """无 llm 参数时, 仍走 keyword 抽取 (向后兼容)."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    tool = DietaryAnalyzerTool()  # 无 llm
+    result = tool.analyze("对花生过敏")
+    assert any(h["value"] == "花生" for h in result["hard_constraints"])
+    assert result.get("like_preferences", []) == []  # keyword 抽不支持 like
+
+
+def test_dietary_llm_extract_prompt_contains_user_msg() -> None:
+    """LLM 抽的 prompt 应包含用户消息原文 (让 LLM 看得到原话)."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    fake = FakeLLM('{"hard_constraints": [], "soft_preferences": [], '
+                   '"like_preferences": [], "has_restrictions": false, '
+                   '"confidence": 0.5}')
+    tool = DietaryAnalyzerTool(llm=fake)
+    tool.analyze("测试消息: 我对螃蟹过敏")
+
+    assert "我对螃蟹过敏" in fake.last_prompt
+
+
+# =============================================================================
 # 公共
 # =============================================================================
 
