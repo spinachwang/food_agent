@@ -474,3 +474,75 @@ def test_foodagent_recall_uses_user_id(tmp_path) -> None:
         # bob 没有偏好, "用户偏好" 这段不应出现
         # (master prompt 里不含 "用户偏好" 这字符串, 用它作 marker)
         assert "用户偏好" not in combined
+
+
+# =============================================================================
+# Phase B: master.run 自动 save_preference
+# =============================================================================
+
+def test_foodagent_auto_saves_sweet_preference(tmp_path) -> None:
+    """run() 说完 '我不喜欢甜的' 后, long_term 自动写 avoid_甜."""
+    from food_agent.master import FoodAgent
+    from food_agent.memory.long_term import LongTermMemory
+
+    db = tmp_path / "ltm.db"
+    with LongTermMemory(db) as ltm:
+        agent = FoodAgent(llm=FakeLLM(["ok"]), long_term=ltm)  # type: ignore[arg-type]
+        agent.run("我不喜欢甜的", user_id="alice")
+
+        prefs = ltm.get_preferences("alice")
+        assert any(p.key == "avoid_甜" and p.confidence == 0.7 for p in prefs), \
+            f"expected avoid_甜, got {[(p.key, p.value, p.confidence) for p in prefs]}"
+
+
+def test_foodagent_auto_saves_allergy(tmp_path) -> None:
+    """run() 说完 '我对花生过敏' 后, long_term 自动写 allergy_花生."""
+    from food_agent.master import FoodAgent
+    from food_agent.memory.long_term import LongTermMemory
+
+    db = tmp_path / "ltm.db"
+    with LongTermMemory(db) as ltm:
+        agent = FoodAgent(llm=FakeLLM(["ok"]), long_term=ltm)  # type: ignore[arg-type]
+        agent.run("我对花生过敏", user_id="bob")
+
+        prefs = ltm.get_preferences("bob")
+        assert any(p.key == "allergy_花生" and p.confidence == 0.9 for p in prefs), \
+            f"expected allergy_花生, got {[(p.key, p.value, p.confidence) for p in prefs]}"
+
+
+def test_foodagent_second_run_recalls_saved_preference(tmp_path) -> None:
+    """端到端: 第一轮说偏好 → 第二轮 (有关键词 query) 召回注入 messages.
+
+    注: recall_for_query 用 keyword substring 匹配, 跨无关联 query 召回
+    要 Phase C 的 embedding 升级, 这里只验证链路本身.
+    """
+    from food_agent.master import FoodAgent
+    from food_agent.memory.long_term import LongTermMemory
+
+    db = tmp_path / "ltm.db"
+    with LongTermMemory(db) as ltm:
+        fake = FakeLLM(["r1", "r2"])
+        agent = FoodAgent(llm=fake, long_term=ltm)  # type: ignore[arg-type]
+        # 第一轮: save 偏好
+        agent.run("我不喜欢甜的", user_id="carol")
+        # 第二轮: 含 "甜" 的 query, 应能召回
+        agent.run("别给我推荐甜的", user_id="carol")
+        combined = " ".join(str(m) for m in fake.last_messages)
+        assert "甜" in combined
+        assert "用户偏好" in combined
+
+
+def test_foodagent_auto_save_fails_soft_on_long_term_error(tmp_path) -> None:
+    """long_term 关闭/出错时, auto_save 不挂上层."""
+    from food_agent.master import FoodAgent
+    from food_agent.memory.long_term import LongTermMemory
+
+    db = tmp_path / "ltm.db"
+    ltm = LongTermMemory(db)
+    ltm.close()  # 关闭后所有 sqlite 操作都报错
+
+    fake = FakeLLM(["ok"])
+    agent = FoodAgent(llm=fake, long_term=ltm)  # type: ignore[arg-type]
+    # 不抛
+    result = agent.run("我对花生过敏", user_id="dave")
+    assert "ok" in result

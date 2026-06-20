@@ -223,6 +223,46 @@ def test_dietary_no_restrictions() -> None:
     assert data["confidence"] == 0.5
 
 
+# =============================================================================
+# Phase B: 甜 / 糖 关键词 (auto-save 链路打通前置)
+# =============================================================================
+
+def test_dietary_sweet_soft_preference() -> None:
+    """'不喜欢甜的' → soft_preferences (avoid_甜)."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    tool = DietaryAnalyzerTool()
+    result = tool.call(json.dumps({"user_msg": "我不喜欢甜的"}))
+    data = json.loads(result)
+    assert data["has_restrictions"] is True
+    assert any(s["value"] == "甜" for s in data["soft_preferences"])
+
+
+def test_dietary_sugar_allergy() -> None:
+    """'不能吃糖' (糖尿病场景) → hard_constraints."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    tool = DietaryAnalyzerTool()
+    result = tool.call(json.dumps({"user_msg": "我有糖尿病不能吃糖"}))
+    data = json.loads(result)
+    assert data["has_restrictions"] is True
+    allergy = [h for h in data["hard_constraints"] if h.get("type") == "allergy"]
+    assert any(h["value"] == "糖" for h in allergy)
+
+
+def test_dietary_dessert_keywords() -> None:
+    """甜食系关键词 (蛋糕 / 奶茶 / 冰淇淋) → soft_preferences."""
+    from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+
+    tool = DietaryAnalyzerTool()
+    for kw in ("蛋糕", "奶茶", "冰淇淋"):
+        result = tool.call(json.dumps({"user_msg": f"我不爱吃{kw}"}))
+        data = json.loads(result)
+        assert data["has_restrictions"] is True
+        assert any(s["value"] == kw for s in data["soft_preferences"]), \
+            f"expected soft pref for {kw}, got {data['soft_preferences']}"
+
+
 def test_dietary_integrates_long_term(tmp_path) -> None:
     """context.user_id + long_term 注入 → 已知偏好自动加载."""
     from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool

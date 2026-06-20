@@ -26,8 +26,8 @@ ALLERGY_KEYWORDS = [
     "麸质", "面筋", "小麦",
     "大豆", "黄豆", "豆腐",
     "芝麻",
-]
-# 硬约束: 宗教 / 素食
+    "糖",  # 糖尿病免糖 (description 已提到, keyword 漏掉 → Phase B 补)
+]  # fmt: skip
 RELIGION_KEYWORDS = {
     "清真": "halal",
     "halal": "halal",
@@ -46,6 +46,8 @@ RELIGION_KEYWORDS = {
 SOFT_AVOID_KEYWORDS = [
     "香菜", "葱", "蒜", "苦瓜", "内脏",
     "肥肉", "皮", "骨头",
+    # 甜食系 (Phase B)
+    "甜", "甜食", "甜点", "蛋糕", "冰淇淋", "奶茶", "糖水",
 ]
 # 软偏好否定模式: "不爱吃 X" / "不吃 X" / "讨厌 X" / "嫌 X"
 _SOFT_AVOID_PATTERN = re.compile(

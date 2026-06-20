@@ -178,6 +178,46 @@ class FoodAgent:
         ]
         return "## 用户偏好 (从长期记忆召回)\n" + "\n".join(lines)
 
+    def _persist_dietary_preferences(self, user_id: str, user_msg: str) -> None:
+        """从 user_msg 抽取饮食限制并自动写入 long_term (Phase B).
+
+        调用 DietaryAnalyzerTool.analyze() (纯函数, 无 LLM 调用), 把
+        source == "msg" 的项写到 long_term. key 约定:
+        - 硬约束 (allergy/religion): key = "allergy_<value>" / "religion_<code>"
+        - 软偏好 (avoid): key = "avoid_<value>"
+
+        fail-soft: 任何异常 logger.warning + return, 不挂上层.
+        """
+        if not self._long_term:
+            return
+        try:
+            from food_agent.agents.analyzers.dietary import DietaryAnalyzerTool
+            result = DietaryAnalyzerTool(long_term=self._long_term).analyze(
+                user_msg, context={"user_id": user_id}
+            )
+        except Exception as e:
+            logger.warning("dietary auto-save: analyze failed: %s", e)
+            return
+
+        try:
+            for h in result.get("hard_constraints", []):
+                if h.get("source") != "msg":
+                    continue  # 跳过从 long_term 召回的, 不重复写
+                prefix = "allergy" if h.get("type") == "allergy" else "religion"
+                self._long_term.save_preference(
+                    user_id, f"{prefix}_{h['value']}", h["value"],
+                    confidence=0.9, source="explicit",
+                )
+            for s in result.get("soft_preferences", []):
+                if s.get("source") != "msg":
+                    continue
+                self._long_term.save_preference(
+                    user_id, f"avoid_{s['value']}", s["value"],
+                    confidence=0.7, source="explicit",
+                )
+        except Exception as e:
+            logger.warning("dietary auto-save: save_preference failed: %s", e)
+
     def run(
         self,
         user_msg: str,
@@ -263,6 +303,8 @@ class FoodAgent:
                 )
             except Exception as e:
                 logger.warning("record_recommendation failed: %s", e)
+            # Phase B: 自动从 user_msg 抽饮食偏好并写入 long_term
+            self._persist_dietary_preferences(user_id, user_msg)
 
         return response
 
