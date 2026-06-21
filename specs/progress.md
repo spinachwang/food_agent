@@ -19,7 +19,9 @@
 | **Phase 3.1 (高德地图 MCP)** | ✅ 完成 | commit `02bbf87`, 3 个子任务 |
 | **Phase 3.2 (3 维分析器)** | ✅ 完成 | commit `57d6937`, 3 个 analyzer tool |
 | **Phase 3.3 (补齐 13 菜系)** | ✅ 完成 | commit TBD, 13 菜系 × 3 文件 + 160 测试 |
-| 测试 | ✅ 382 个全过 | 整体覆盖率 83.88% (新增 160 测试) |
+| **流式输出 (3.7 polish)** | ✅ 完成 | commit `e741356` (master) + `df99f5c` (cli) |
+| **CLI AmapClient 集成修复** | ✅ 完成 | commit `df99f5c` (含在 cli 改动一起) |
+| 测试 | ✅ 418 个全过 | 整体覆盖率 ~83% (本次新增 11 个测试) |
 
 ---
 
@@ -61,6 +63,18 @@
 - 新增 `amap_client: AmapClient | None = None` 参数
 - 传了之后: 5 个 location tool 自动加入 `self.tools`
 - `master_v1.md` 新增"位置与天气工具"段, 描述典型用法流程
+
+### CLI 集成 (commit `df99f5c` 修复)
+- **Bug**: 之前 CLI 的 `_build_agent()` 没构造 `AmapClient`,
+  导致 `FoodAgent._amap_client = None` → `set_amap_client()` 没调 →
+  `tools/location` 模块级单例是 None → 3 个 analyzer (天气/位置/饮食)
+  全部返回 `{"confidence": 0.0, "error": "AmapClient 未配置..."}`.
+- 单元测试都直接 `FoodAgent(amap_client=AmapClient(...))`, 只有 CLI
+  走 `_build_agent()` 这条路径会触发, 所以单测全过但 E2E 失败.
+- **修复**: 新增 `_build_amap_client()` 函数, 默认从 env 读
+  (`AMAP_USE_MOCK` / `AMAP_API_KEY`), 缺 key 时 stderr 警告 + 关闭.
+- 新增 CLI flags: `--amap-mock` (强制 mock, 覆盖 env, 省 key 配额),
+  `--no-amap` (关闭 amap, analyzer 返 confidence=0 不阻塞主流程).
 
 ### .env 配置
 ```bash
@@ -232,6 +246,10 @@ with AmapClient() as amap:  # 默认 mock 模式 (或读 .env)
 
 ### 3.7 Polish
 - 启动时 13 个菜系 skip warning 改 `logger.debug`
+- ✅ **流式分阶段输出** (commit `e741356` + `df99f5c`):
+  - `master.run(on_event=...)` 回调接口, 迭代 `Assistant.run()` batches
+  - CLI `--verbose/-v` flag, REPL 默认开启
+  - 工具调用 / 结果用 rich + emoji 实时显示 (🌦️ 查天气 / 🍜 请教川菜专家 / ✅ 预览)
 - CLI 改进 (--no-memory / --user-id / --reset)
 
 ---
@@ -277,7 +295,9 @@ with AmapClient() as amap:  # 默认 mock 模式 (或读 .env)
 8. **AmapClient 真模式** — 每次 call 新建 mcp session (200ms 开销). 高德限频 3 QPS, 一次推荐流程 2-3 次 location call 不会触限
 9. **geocode v2 schema** — 高德实际返回 `"location": "lng,lat"` 字符串, AmapClient 内部规范化成 `{lng, lat}` dict
 10. **mcp SDK 顶层 import** — `amap_client.py` 顶部 import, 便于 test patch (`food_agent.mcp.amap_client.streamablehttp_client`)
-11. **mcp SDK 加载 dotenv** — `amap_client.py` 顶部 `load_dotenv()`, 独立可用
+11. **mcp SDK 顶层 import** — `amap_client.py` 顶部 import, 便于 test patch (`food_agent.mcp.amap_client.streamablehttp_client`)
+12. **mcp SDK 加载 dotenv** — `amap_client.py` 顶部 `load_dotenv()`, 独立可用
+13. **CLI 不构造 AmapClient** — 修复 commit `df99f5c`. 见 "Phase 3.1 / CLI 集成" 段
 
 ---
 
