@@ -23,7 +23,8 @@
 | **CLI AmapClient 集成修复** | ✅ 完成 | commit `df99f5c` (含在 cli 改动一起) |
 | **Phase 3.5 Web UI (Gradio)** | ✅ 完成 | qwen_agent.gui.WebUI 包装 FoodAgent._assistant |
 | **Phase 3.5 master tool 精简** | ✅ 完成 | 22 → 17 tool (location tool 收进 analyzer 内部) |
-| 测试 | ✅ 427 个全过 | 整体覆盖率 ~83% (本次新增 6 个测试) |
+| **detect_location analyzer** | ✅ 完成 | 用户消息无地址时 master 主动调, IP 定位 (17 → 18 tool) |
+| 测试 | ✅ 433 个全过 | 整体覆盖率 ~83% (本次新增 6 个测试) |
 
 ---
 

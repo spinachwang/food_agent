@@ -581,13 +581,117 @@ def test_dietary_llm_extract_prompt_contains_user_msg() -> None:
 # 公共
 # =============================================================================
 
-def test_list_analyzer_tools_returns_three() -> None:
-    """list_analyzer_tools 返 3 个 tool."""
+def test_list_analyzer_tools_returns_four() -> None:
+    """list_analyzer_tools 返 4 个 tool (Phase 3.5 加 detect_location)."""
     from food_agent.agents.analyzers import list_analyzer_tools
 
     tools = list_analyzer_tools()
-    assert len(tools) == 3
+    assert len(tools) == 4
     names = [getattr(t, "name", "") for t in tools]
     assert "analyze_weather" in names
     assert "analyze_location" in names
     assert "analyze_dietary" in names
+    assert "detect_location" in names
+
+
+# =============================================================================
+# IPLocatorTool (Phase 3.5: detect_location, IP 定位)
+# =============================================================================
+
+
+def test_ip_locator_basic() -> None:
+    """mock amap 返 city → detect_location 拿城市中心坐标."""
+    from food_agent.agents.analyzers.ip import IPLocatorTool
+    from food_agent.tools.location import set_amap_client
+
+    class FakeClient:
+        def ip_location(self, ip):
+            # mock 模式 _mock_ip_location(None) 默认返北京
+            return {
+                "province": "北京市",
+                "city": "北京",
+                "adcode": "110000",
+                "rectangle": "116.0,39.6;116.8,40.2",
+            }
+
+    set_amap_client(FakeClient())
+    tool = IPLocatorTool()
+    result = tool.call(json.dumps({}))  # 不需要参数
+    data = json.loads(result)
+    assert data["source"] == "ip"
+    assert data["city"] == "北京"
+    assert data["lng"] == 116.4074  # 城市中心近似
+    assert data["lat"] == 39.9042
+    assert data["confidence"] == 0.7
+
+
+def test_ip_locator_no_amap_client() -> None:
+    """AmapClient 没注入 → confidence=0 + error."""
+    from food_agent.agents.analyzers.ip import IPLocatorTool
+    from food_agent.tools.location import set_amap_client
+
+    set_amap_client(None)
+    tool = IPLocatorTool()
+    data = json.loads(tool.call(json.dumps({})))
+    assert data["confidence"] == 0.0
+    assert "error" in data
+
+
+def test_ip_locator_empty_city() -> None:
+    """amap 返空 city (CLI 真模式拿不到 IP) → confidence=0."""
+    from food_agent.agents.analyzers.ip import IPLocatorTool
+    from food_agent.tools.location import set_amap_client
+
+    class FakeClient:
+        def ip_location(self, ip):
+            return {}  # CLI 真模式拿不到 IP
+
+    set_amap_client(FakeClient())
+    tool = IPLocatorTool()
+    data = json.loads(tool.call(json.dumps({})))
+    assert data["confidence"] == 0.0
+    assert "IP 定位" in data["error"]
+
+
+def test_ip_locator_unknown_city_lower_confidence() -> None:
+    """高德返的城市不在 _CITY_CENTERS (小城市) → lng/lat 是 None, confidence=0.5."""
+    from food_agent.agents.analyzers.ip import IPLocatorTool
+    from food_agent.tools.location import set_amap_client
+
+    class FakeClient:
+        def ip_location(self, ip):
+            return {"province": "西藏自治区", "city": "拉萨", "adcode": "540100"}
+
+    set_amap_client(FakeClient())
+    tool = IPLocatorTool()
+    data = json.loads(tool.call(json.dumps({})))
+    assert data["city"] == "拉萨"
+    assert data["lng"] is None  # 没城市中心坐标
+    assert data["lat"] is None
+    assert data["confidence"] == 0.5  # 降一档
+
+
+def test_ip_locator_exception_handled() -> None:
+    """AmapClient 抛异常 → fail-soft, 不挂上层."""
+    from food_agent.agents.analyzers.ip import IPLocatorTool
+    from food_agent.tools.location import set_amap_client
+
+    class FakeClient:
+        def ip_location(self, ip):
+            raise RuntimeError("网络断了")
+
+    set_amap_client(FakeClient())
+    tool = IPLocatorTool()
+    data = json.loads(tool.call(json.dumps({})))
+    assert data["confidence"] == 0.0
+    assert "RuntimeError" in data["error"]
+
+
+def test_ip_locator_schema() -> None:
+    """name + parameters schema 正确 (LLM 能调)."""
+    from food_agent.agents.analyzers.ip import IPLocatorTool
+
+    assert IPLocatorTool.name == "detect_location"
+    # 不需要任何参数
+    assert IPLocatorTool.parameters.get("required", []) == []
+    assert IPLocatorTool.parameters["properties"] == {}

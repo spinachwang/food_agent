@@ -17,20 +17,23 @@ def test_food_agent_loads_default_cuisines() -> None:
 
 
 def test_food_agent_builds_tools_from_agents() -> None:
-    """每个菜系 agent 对应一个 consult tool, + 3 个 analyzer tool (Phase 3.2).
+    """每个菜系 agent 对应一个 consult tool, + 4 个 analyzer tool (Phase 3.5).
 
-    Phase 3.5: 5 个 location tool (geocode/regeocode/search_around/weather/route)
-    不再直接暴露给 master — 改由 analyze_location/analyze_weather 内部调 AmapClient.
-    master LLM 现在看到 14 菜系 + 3 analyzer = 17 tool (原 22), 符合 LLM 选择能力.
+    Phase 3.5 改造:
+    - 5 个 raw location tool 不再直接暴露给 master — 由 analyzer 内部调 AmapClient
+    - 新增 detect_location (Phase 3.5): 用户消息没地址时 master 主动调, 拿 IP 定位
+
+    master LLM 现在看到 14 菜系 + 4 analyzer = 18 tool (Phase 3.5 初 22, 减 location 后 17, 加 detect 后 18)
     """
     llm = FakeLLM(["ok"])
     agent = FoodAgent(llm=llm)
     tool_names = {t.name for t in agent.tools}
     assert "consult_sichuan" in tool_names
-    # analyzer tool (Phase 3.2) 也应自动加入
+    # 4 个 analyzer tool (Phase 3.5)
     assert "analyze_weather" in tool_names
     assert "analyze_location" in tool_names
     assert "analyze_dietary" in tool_names
+    assert "detect_location" in tool_names  # Phase 3.5 新增
     # consult_* 类 tool 都是 CuisineConsultTool
     consult_tools = [t for t in agent.tools if t.name.startswith("consult_")]
     assert all(isinstance(t, CuisineConsultTool) for t in consult_tools)
@@ -39,9 +42,9 @@ def test_food_agent_builds_tools_from_agents() -> None:
         assert raw not in tool_names, (
             f"{raw} 不应直接暴露给 master, 应走 analyzer 内部"
         )
-    # 工具总数: 14 菜系 + 3 analyzer = 17
-    assert len(agent.tools) == 17, (
-        f"master 应只看到 17 tool (14 菜系 + 3 analyzer), 实际 {len(agent.tools)}"
+    # 工具总数: 14 菜系 + 4 analyzer = 18
+    assert len(agent.tools) == 18, (
+        f"master 应只看到 18 tool (14 菜系 + 4 analyzer), 实际 {len(agent.tools)}"
     )
 
 
