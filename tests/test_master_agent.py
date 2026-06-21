@@ -184,3 +184,126 @@ def test_food_agent_dietary_tool_receives_llm_instance() -> None:
         # 找 dietary tool
         dietary = next(t for t in agent.tools if t.name == "analyze_dietary")
         assert dietary._llm is fake_llm_instance  # 不是 dict!
+
+
+# =============================================================================
+# 流式事件回调 (on_event) — 分阶段输出
+# =============================================================================
+
+
+class _ToolCallFakeLLM:
+    """模拟 master LLM: 第 1 次返回 function_call, 第 2 次返回文本.
+
+    用于测试 master.run() 在多轮 LLM 调用中能正确发 tool_call /
+    tool_result 事件. 仅用作 master 的 LLM, 不影响 sub-agent.
+    """
+
+    def __init__(
+        self,
+        tool_name: str = "consult_sichuan",
+        tool_args: str = '{"user_query": "辣的"}',
+        final_text: str = "推荐: 麻婆豆腐",
+    ) -> None:
+        self.tool_name = tool_name
+        self.tool_args = tool_args
+        self.final_text = final_text
+        self.call_count = 0
+        self.model = "fake-toolcall"
+        self.model_type = "fake"
+        self.generate_cfg: dict = {}
+        self.max_retries = 0
+        self.cache = None
+        self.use_raw_api = False
+
+    def chat(self, messages, functions=None, stream=True, **kwargs):
+        self.call_count += 1
+        from qwen_agent.llm.schema import FunctionCall, Message as QMessage
+
+        def _gen():
+            if self.call_count == 1:
+                # extra 必须有, 否则 qwen-agent fncall_agent.py:101 读 out.extra.get 报错
+                msg = QMessage(
+                    role="assistant",
+                    content="",
+                    function_call=FunctionCall(
+                        name=self.tool_name, arguments=self.tool_args,
+                    ),
+                    extra={"function_id": "test_call_1"},
+                )
+            else:
+                msg = QMessage(role="assistant", content=self.final_text)
+            yield [msg]
+
+        return _gen()
+
+
+def test_run_emits_tool_call_event() -> None:
+    """on_event 收到 tool_call 事件, name + args 正确."""
+    sichuan_llm = FakeLLM(["麻婆豆腐 yyds"])
+    sichuan_agent = SichuanAgent(llm=sichuan_llm)
+    master_llm = _ToolCallFakeLLM(
+        tool_name="consult_sichuan",
+        tool_args='{"user_query": "想吃辣的"}',
+    )
+    agent = FoodAgent(llm=master_llm, cuisine_agents=[sichuan_agent])
+
+    events: list[dict] = []
+    agent.run("test", on_event=events.append)
+
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["name"] == "consult_sichuan"
+    assert tool_calls[0]["args"] == {"user_query": "想吃辣的"}
+
+
+def test_run_emits_tool_result_event() -> None:
+    """on_event 收到 tool_result 事件, content 含工具输出."""
+    sichuan_llm = FakeLLM(["麻婆豆腐 yyds"])
+    sichuan_agent = SichuanAgent(llm=sichuan_llm)
+    master_llm = _ToolCallFakeLLM()
+    agent = FoodAgent(llm=master_llm, cuisine_agents=[sichuan_agent])
+
+    events: list[dict] = []
+    agent.run("test", on_event=events.append)
+
+    tool_results = [e for e in events if e["type"] == "tool_result"]
+    assert len(tool_results) == 1
+    assert tool_results[0]["name"] == "consult_sichuan"
+    assert "麻婆豆腐" in tool_results[0]["content"]
+    assert tool_results[0]["ok"] is True
+
+
+def test_run_without_callback_works() -> None:
+    """on_event=None 时 run() 行为完全等价于旧版, 返回最终回复."""
+    llm = FakeLLM([
+        "调用了 consult_sichuan, 它说: 推荐陈麻婆豆腐",
+    ])
+    agent = FoodAgent(llm=llm)
+    # 不传 on_event
+    result = agent.run("test")
+    assert isinstance(result, str)
+    assert len(result) > 0
+    # 显式传 None 也应 work
+    result2 = agent.run("test", on_event=None)
+    assert isinstance(result2, str)
+
+
+def test_run_emits_events_in_order() -> None:
+    """多工具调用场景: 同一工具的 tool_call 在 tool_result 之前."""
+    sichuan_llm = FakeLLM(["麻婆豆腐 yyds"])
+    sichuan_agent = SichuanAgent(llm=sichuan_llm)
+    master_llm = _ToolCallFakeLLM()
+    agent = FoodAgent(llm=master_llm, cuisine_agents=[sichuan_agent])
+
+    events: list[dict] = []
+    agent.run("test", on_event=events.append)
+
+    # 应有 tool_call → tool_result 成对出现
+    assert len(events) >= 2
+    tool_call_idx = next(
+        i for i, e in enumerate(events) if e["type"] == "tool_call"
+    )
+    tool_result_idx = next(
+        i for i, e in enumerate(events) if e["type"] == "tool_result"
+    )
+    assert tool_call_idx < tool_result_idx  # tool_call 先, tool_result 后

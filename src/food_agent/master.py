@@ -13,7 +13,9 @@ Phase 2 接入:
 """
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +46,12 @@ MASTER_PROMPT_PATH = _PACKAGE_DIR / "config" / "prompts" / "master_v1.md"
 # Phase 1 兼容: 默认 fallback 文本 (与原 _default_cuisines 一致)
 # Phase 3 计划: per-cuisine fallback (每个菜系自己定义)
 _DEFAULT_FALLBACK_TEXT = "推荐通用川菜: 麻婆豆腐、回锅肉"
+
+# 流式输出事件类型 (CLI handler 引用)
+EVENT_TOOL_CALL = "tool_call"
+EVENT_TOOL_RESULT = "tool_result"
+# 结果预览最大字符数 (CLI 显示用, 太长会淹没其他输出)
+_RESULT_PREVIEW_MAX = 80
 
 
 def _load_master_prompt(path: Path | None = None) -> str:
@@ -259,6 +267,7 @@ class FoodAgent:
         session_id: str | None = None,
         user_id: str = "default",
         history: list[dict] | None = None,
+        on_event: Callable[[dict], None] | None = None,
     ) -> str:
         """运行主流程.
 
@@ -267,6 +276,13 @@ class FoodAgent:
             session_id: 会话 ID (Phase 2.5 短期记忆). 传 None 则无记忆 (Phase 1 行为).
             user_id: 用户 ID (Phase 2.6 长期记忆偏好召回/记录). 默认 "default".
             history: 显式历史消息 (可选, 优先级高于 session_id).
+            on_event: 流式进度回调. 传 None 时不回调 (向后兼容).
+                回调收到的 event 字典:
+                - {"type": "tool_call", "name": <tool_name>, "args": <parsed_args>}
+                  master LLM 决定调工具时触发.
+                - {"type": "tool_result", "name": <tool_name>, "content": <str>,
+                   "ok": <bool>}
+                  工具返回结果时触发. ok=False 表示结果含 "error" 字段.
 
         Returns:
             Assistant 的最终回复.
@@ -293,18 +309,28 @@ class FoodAgent:
         # 3. 用户消息
         messages.append({"role": "user", "content": user_msg})
 
+        # 迭代 Assistant.run() batches, 每个 batch 含累计响应.
+        # 通过对比前后 batch 的长度, 找出"新增"的消息, 转事件回调.
+        # 注意: qwen-agent 的 FnCallAgent._run 用 response 列表只增不增,
+        # 所以 batch[prev_size:] 一定是本轮新增的 (assistant 决策 + tool 结果).
+        prev_batch_size = 0
+        all_batches: list[Any] = []
         try:
-            responses = list(self._assistant.run(messages, **self._assistant_call_kwargs()))
+            for batch in self._assistant.run(messages, **self._assistant_call_kwargs()):
+                all_batches.append(batch)
+                if on_event is not None:
+                    self._emit_new_events(batch, prev_batch_size, on_event)
+                prev_batch_size = len(batch)
         except LLMError:
             raise
         except Exception as e:
             raise LLMError(f"master agent failed: {e}") from e
 
-        if not responses:
+        if not all_batches:
             return self._fallback_response()
 
-        # responses[-1] 是最后一批 assistant/tool 消息
-        last_batch = responses[-1]
+        # 最后一批是 assistant/tool 消息的累积
+        last_batch = all_batches[-1]
         if not last_batch:
             return self._fallback_response()
 
@@ -344,6 +370,60 @@ class FoodAgent:
             self._persist_dietary_preferences(user_id, user_msg)
 
         return response
+
+    @staticmethod
+    def _emit_new_events(
+        batch: Any,
+        prev_size: int,
+        on_event: Callable[[dict], None],
+    ) -> None:
+        """从 batch 的新增消息中提取 tool_call / tool_result 事件.
+
+        Args:
+            batch: 本轮 Assistant.run() 产出的完整 batch (累计响应).
+            prev_size: 上一轮 batch 的长度 (本 batch 可能有重复, slice 切新增).
+            on_event: 事件回调.
+        """
+        # batch 可能是 list[Message] 或 list[dict]; 统一取 role/name/function_call/content
+        new_msgs = list(batch[prev_size:]) if prev_size <= len(batch) else list(batch)
+        for msg in new_msgs:
+            role = FoodAgent._msg_get(msg, "role")
+            if role == "function":
+                # 工具返回结果 (qwen-agent 内部消息, role='function')
+                name = FoodAgent._msg_get(msg, "name") or ""
+                content = FoodAgent._msg_get(msg, "content") or ""
+                content_str = content if isinstance(content, str) else str(content)
+                ok = '"error"' not in content_str and '"confidence": 0.0' not in content_str
+                on_event({
+                    "type": EVENT_TOOL_RESULT,
+                    "name": name,
+                    "content": content_str,
+                    "ok": ok,
+                })
+            elif role == "assistant":
+                fc = FoodAgent._msg_get(msg, "function_call")
+                if fc:
+                    # master 决定调工具
+                    fc_name = fc.get("name") if isinstance(fc, dict) else getattr(fc, "name", "")
+                    fc_args_raw = fc.get("arguments") if isinstance(fc, dict) else getattr(fc, "arguments", "{}")
+                    # arguments 是 JSON 字符串, 解析失败兜底原串
+                    try:
+                        fc_args = json.loads(fc_args_raw) if fc_args_raw else {}
+                    except (json.JSONDecodeError, TypeError):
+                        fc_args = {"raw": fc_args_raw}
+                    on_event({
+                        "type": EVENT_TOOL_CALL,
+                        "name": fc_name,
+                        "args": fc_args,
+                    })
+            # 其他 (user / system / 最终 assistant 文本) 跳过 — 由返回值表达
+
+    @staticmethod
+    def _msg_get(msg: Any, key: str) -> Any:
+        """从 Message 对象或 dict 安全取字段."""
+        if isinstance(msg, dict):
+            return msg.get(key)
+        return getattr(msg, key, None)
 
     @staticmethod
     def _extract_content(msg: Any) -> str:
