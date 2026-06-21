@@ -21,7 +21,8 @@
 | **Phase 3.3 (补齐 13 菜系)** | ✅ 完成 | commit TBD, 13 菜系 × 3 文件 + 160 测试 |
 | **流式输出 (3.7 polish)** | ✅ 完成 | commit `e741356` (master) + `df99f5c` (cli) |
 | **CLI AmapClient 集成修复** | ✅ 完成 | commit `df99f5c` (含在 cli 改动一起) |
-| 测试 | ✅ 418 个全过 | 整体覆盖率 ~83% (本次新增 11 个测试) |
+| **Phase 3.5 Web UI (Gradio)** | ✅ 完成 | qwen_agent.gui.WebUI 包装 FoodAgent._assistant |
+| 测试 | ✅ 421 个全过 | 整体覆盖率 ~83% (本次新增 14 个测试) |
 
 ---
 
@@ -238,8 +239,20 @@ with AmapClient() as amap:  # 默认 mock 模式 (或读 .env)
 - 美团 / 饿了么 (H5 跳转 → 路径 B, 推荐)
 - 或接 Open API (路径 C, 全流程)
 
-### 3.5 Web UI (Gradio)
-- 接入 `web.py` (目前 stub)
+### 3.5 Web UI (Gradio) ✅ 完成
+- `web.py` 顶层 try/except import `qwen_agent.gui.WebUI` (避免 gradio
+  deprecation warning 在 pytest `--strict-config` 下被升级为 error)
+- 复用 `cli._build_agent()` 构造 FoodAgent (amap/long_term 自动配好)
+- `WebUI(agent._assistant, chatbot_config=...)` + `.run(server_name, server_port)`
+- 环境变量: `FOOD_AGENT_WEB_HOST` (默认 127.0.0.1), `FOOD_AGENT_WEB_PORT` (默认 7860)
+- Trade-off (vs 走 FoodAgent.run()):
+  - ✅ 14 菜系调度 + 高德 MCP (assistant 已含这些 tools)
+  - ❌ 短期/长期记忆 (WebUI 自己管 history, 不走 STM/LTM)
+  - ❌ 饮食偏好自动保存 (FoodAgent.run() 才触发)
+  - ❌ on_event 流式进度 (WebUI 是黑盒)
+- Phase 6 计划: 自定义 gr.ChatInterface + FoodAgent.run() + 流式 on_event
+- 跑法: `PYTHONIOENCODING=utf-8 conda run -n qwenagent-mcp python -m food_agent.web`
+  → 浏览器 http://127.0.0.1:7860
 
 ### 3.6 记忆升级
 - FTS5 / embedding 替换 keyword 召回
