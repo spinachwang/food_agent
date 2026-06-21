@@ -125,6 +125,37 @@ def test_location_analyzer_from_address() -> None:
     assert data["confidence"] > 0.5
 
 
+def test_location_analyzer_extracts_full_address() -> None:
+    """回归测试: 城市 + 区/路/商场 都要被抽出 (不止城市名).
+
+    之前 regex bug: group 1 只匹配城市名, 后续汉字被丢. 例:
+        "我在杭州市钱塘区义蓬购物中心" → 之前返 "杭州", 现在返 "杭州市钱塘区义蓬购物中心".
+    修复: 把 alternation 用 (?:...) 非捕获组包起来.
+
+    regex 是贪心的 ([一-龥]{0,15}), 所以会尽量多匹配后续汉字.
+    """
+    from food_agent.agents.analyzers.location import _extract_address
+
+    # (user_msg, 期望地址必须包含城市)
+    cases = [
+        ("我在杭州市钱塘区义蓬购物中心", "杭州市钱塘区义蓬购物中心"),
+        ("我在北京海淀中关村", "北京海淀中关村"),
+        ("我家住在上海市浦东新区陆家嘴", "上海市浦东新区陆家嘴"),
+        ("到杭州西湖区", "杭州西湖区"),
+    ]
+    for user_msg, expected in cases:
+        addr = _extract_address(user_msg)
+        assert addr == expected, (
+            f"_extract_address({user_msg!r}) 返 {addr!r}, 期望 {expected!r}"
+        )
+
+    # 贪心匹配: 包含 trigger 的句子会一直匹配到 15 字上限或结尾
+    addr = _extract_address("今天在广州市天河城吃早茶")
+    assert "广州" in addr and "天河城" in addr, (
+        f"_extract_address 贪心应至少含 广州市天河城, 实际 {addr!r}"
+    )
+
+
 def test_location_analyzer_no_ip_no_address() -> None:
     """既无 IP 也无地址 → confidence 0."""
     from food_agent.agents.analyzers.location import LocationAnalyzerTool
