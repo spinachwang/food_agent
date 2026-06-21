@@ -53,9 +53,12 @@ def main() -> None:  # pragma: no cover
     WebUI(
         agent._assistant,
         chatbot_config={
+            # user.name / agent.name 是聊天框里显示的名字, 可放 emoji
             "user.name": "你",
-            "agent.avatar": "🍜",
-            "input.placeholder": "想吃啥? 输入 'quit' 退不出 (web 模式不限时)",
+            "agent.name": "🍜 老饕",
+            # agent.avatar 是 bot 封面大图, 必须是图片文件路径 (gif/jpeg/png)
+            # 不传则用 qwen-agent 默认图; 想自定义可传本地 PNG 路径.
+            "input.placeholder": "想吃啥? 输入 quit 退不出 (web 模式不限时)",
             "prompt.suggestions": [
                 "我想吃辣的, 一个人, 预算 100",
                 "今天北京下雨, 推荐暖的汤面",
