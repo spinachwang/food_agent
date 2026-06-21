@@ -143,6 +143,67 @@ def test_master_prompt_file_exists() -> None:
     assert "美食家" in content or "老饕" in content
 
 
+# =============================================================================
+# 防幻觉回归: master prompt 必须声明能力边界 + 硬规则
+# =============================================================================
+
+
+def test_master_prompt_declares_capability_boundaries() -> None:
+    """Master prompt 必须包含"能力边界"段, 明确列出做不到的事 (外卖/订座等).
+
+    Bug 背景 (2026-06-21): 用户问"我在购物中心, 想吃炸鸡", agent 主动提议
+    "外卖 vs 到店 + 帮你拟个凑单思路", 但系统无外卖 tool → 幻觉.
+    根因: prompt 只列"有什么工具", 没列"没有什么", LLM 默认自己是万能助手.
+
+    修复: master_v1.md 必须含"能力边界"段, 显式说"我不能点外卖"等.
+    """
+    from food_agent.master import MASTER_PROMPT_PATH
+
+    content = MASTER_PROMPT_PATH.read_text(encoding="utf-8")
+
+    # 1) 必须有"能力边界"或等价段落标题
+    assert "能力边界" in content, (
+        "master prompt 缺'能力边界'段, 会让 LLM 默认自己什么都能做 → 幻觉"
+    )
+
+    # 2) 必须显式声明: 不能/无法/没接入 + 外卖
+    #    (接受多种说法: 不能点外卖/不接外卖/外卖暂未接入/无法为你点外卖)
+    delivery_negations = ["外卖", "外送", "waimai", "takeout", "delivery"]
+    capability_negations = ["不能", "无法", "没接入", "暂未", "做不到", "不提供"]
+    found_delivery = any(d in content for d in delivery_negations)
+    found_negation = any(n in content for n in capability_negations)
+    assert found_delivery and found_negation, (
+        f"能力边界段必须显式提到'外卖/外送' + '不能/无法'类措辞, "
+        f"否则 LLM 会承诺外卖服务. 当前含外卖={found_delivery}, 含否定词={found_negation}"
+    )
+
+
+def test_master_prompt_hard_rule_on_out_of_scope() -> None:
+    """硬规则里必须有"能力外显式拒绝"这条, 防止 prompt 边界声明被忽略.
+
+    即便 prompt 声明了能力边界, LLM 在长对话里也可能"飘". 需要在硬规则里
+    钉一句"做不到的事直说做不到, 不要编造"作为兜底.
+    """
+    from food_agent.master import MASTER_PROMPT_PATH
+
+    content = MASTER_PROMPT_PATH.read_text(encoding="utf-8")
+
+    # 硬规则段(以 ## 硬规则 开头的那段, 或含"❌"/"✅"符号段)里必须有
+    # "工具做不了"/"做不到"/"能力之外" 类字眼 + "直说"/"明说"/"承认"
+    out_of_scope_patterns = [
+        "工具做不了", "做不到", "超出能力", "能力范围外", "能力之外",
+    ]
+    direct_ack_patterns = ["直说", "明说", "承认", "告诉用户", "别说"]
+
+    found_scope = any(p in content for p in out_of_scope_patterns)
+    found_ack = any(p in content for p in direct_ack_patterns)
+
+    assert found_scope and found_ack, (
+        f"硬规则段必须含'工具做不了/做不到' + '直说/告诉用户'类兜底规则, "
+        f"防止 LLM 在长对话里飘了编造功能. 当前含 scope={found_scope}, 含 ack={found_ack}"
+    )
+
+
 def test_food_agent_repr() -> None:
     """__repr__ 应有信息量."""
     llm = FakeLLM(["ok"])
