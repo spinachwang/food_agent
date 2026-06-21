@@ -158,6 +158,167 @@ def test_location_analyzer_schema() -> None:
 
 
 # =============================================================================
+# analyze_location: 周边搜索集成 (Phase 3.5, 替代 search_around tool)
+# =============================================================================
+
+
+def test_location_analyzer_search_around_triggered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """user_msg 含 "附近" + 食物关键词 → 自动调 search_around, 返回带 pois."""
+    from food_agent.agents.analyzers import location as loc_mod
+    from food_agent.agents.analyzers.location import LocationAnalyzerTool
+    from food_agent.tools.location import set_amap_client
+
+    # mock AmapClient: geocode 返北京海淀坐标, search_around 返 2 个川菜 POI
+    class FakeClient:
+        def geocode(self, address: str) -> dict:
+            return {
+                "location": {"lng": 116.3, "lat": 39.99},
+                "formatted_address": "北京市海淀区" + address,
+                "city": "北京",
+            }
+
+        def search_around(
+            self, lng: float, lat: float, keywords: str, radius: int
+        ) -> list:
+            return [
+                {"name": f"老成都火锅", "address": "海淀路 1 号", "distance": 500},
+                {"name": f"眉州东坡", "address": "海淀路 2 号", "distance": 1200},
+            ]
+
+    set_amap_client(FakeClient())
+
+    tool = LocationAnalyzerTool()
+    result = tool.call(json.dumps({"user_msg": "我在北京海淀, 附近 2km 的川菜"}))
+    data = json.loads(result)
+
+    # 基础字段
+    assert data["source"] == "address"
+    assert data["city"] == "北京"
+    assert data["lng"] == 116.3
+    # 周边搜索字段
+    assert "pois" in data
+    assert len(data["pois"]) == 2
+    assert data["pois"][0]["name"] == "老成都火锅"
+    assert data["search_keywords"] == "川菜"
+    assert data["search_radius"] == 2000  # "2km" → 2000 米
+
+
+def test_location_analyzer_search_around_default_radius(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没指定半径 → 默认 3km."""
+    from food_agent.agents.analyzers.location import LocationAnalyzerTool
+    from food_agent.tools.location import set_amap_client
+
+    captured: dict = {}
+
+    class FakeClient:
+        def geocode(self, address: str) -> dict:
+            return {"location": {"lng": 116.3, "lat": 39.99}, "city": "北京"}
+
+        def search_around(
+            self, lng: float, lat: float, keywords: str, radius: int
+        ) -> list:
+            captured["radius"] = radius
+            captured["keywords"] = keywords
+            return [{"name": "老成都"}]
+
+    set_amap_client(FakeClient())
+    tool = LocationAnalyzerTool()
+    tool.call(json.dumps({"user_msg": "我在北京, 找川菜"}))
+    assert captured["radius"] == 3000  # 默认
+    assert captured["keywords"] == "川菜"
+
+
+def test_location_analyzer_no_search_without_trigger() -> None:
+    """不含 "附近/找/搜" 关键词 → 不调 search_around, 不带 pois."""
+    from food_agent.agents.analyzers.location import LocationAnalyzerTool
+    from food_agent.tools.location import set_amap_client
+
+    class FakeClient:
+        def geocode(self, address: str) -> dict:
+            return {"location": {"lng": 116.3, "lat": 39.99}, "city": "北京"}
+
+        def search_around(self, *a, **kw) -> list:
+            raise AssertionError("不应调 search_around")
+
+    set_amap_client(FakeClient())
+    tool = LocationAnalyzerTool()
+    data = json.loads(tool.call(json.dumps({"user_msg": "我在北京"})))
+    assert "pois" not in data
+
+
+def test_location_analyzer_no_search_without_food_keyword() -> None:
+    """含 "附近" 但无食物关键词 (如 "附近的咖啡馆" 含咖啡) → 触发.
+    含 "附近" 但完全没食物词 (e.g. "附近的公园") → 不触发."""
+    from food_agent.agents.analyzers.location import LocationAnalyzerTool
+    from food_agent.tools.location import set_amap_client
+
+    class FakeClient:
+        def geocode(self, address: str) -> dict:
+            return {"location": {"lng": 116.3, "lat": 39.99}, "city": "北京"}
+
+        def search_around(self, *a, **kw) -> list:
+            raise AssertionError("不应调 search_around")
+
+    set_amap_client(FakeClient())
+    tool = LocationAnalyzerTool()
+    # "附近走走" → 有 trigger 没食物词 → 不调
+    data = json.loads(tool.call(json.dumps({"user_msg": "在北京附近走走"})))
+    assert "pois" not in data
+
+
+def test_location_analyzer_radius_unit_meters() -> None:
+    """'500米' → 500, '2km' → 2000."""
+    from food_agent.agents.analyzers.location import LocationAnalyzerTool
+    from food_agent.tools.location import set_amap_client
+
+    class FakeClient:
+        def geocode(self, address: str) -> dict:
+            return {"location": {"lng": 116.3, "lat": 39.99}, "city": "北京"}
+
+        def search_around(
+            self, lng: float, lat: float, keywords: str, radius: int
+        ) -> list:
+            self.radius = radius
+            return [{"name": "test"}]
+
+    client = FakeClient()
+    set_amap_client(client)
+    tool = LocationAnalyzerTool()
+
+    # "500米" → 数字 < 100 视为米
+    tool.call(json.dumps({"user_msg": "我在北京, 附近 500米 的咖啡"}))
+    assert client.radius == 500
+
+    # "1km" → 数字 < 100 视为 km
+    tool.call(json.dumps({"user_msg": "我在北京, 附近 1km 的咖啡"}))
+    assert client.radius == 1000
+
+
+def test_location_analyzer_search_failure_doesnt_break() -> None:
+    """search_around 抛异常 → 不挂, 仍返回 location 信息."""
+    from food_agent.agents.analyzers.location import LocationAnalyzerTool
+    from food_agent.tools.location import set_amap_client
+
+    class FakeClient:
+        def geocode(self, address: str) -> dict:
+            return {"location": {"lng": 116.3, "lat": 39.99}, "city": "北京"}
+
+        def search_around(self, *a, **kw) -> list:
+            raise RuntimeError("高德 API 限流")
+
+    set_amap_client(FakeClient())
+    tool = LocationAnalyzerTool()
+    data = json.loads(tool.call(json.dumps({"user_msg": "我在北京, 找川菜"})))
+    # location 还在, pois 不在
+    assert data["lng"] == 116.3
+    assert "pois" not in data
+
+
+# =============================================================================
 # DietaryAnalyzerTool
 # =============================================================================
 

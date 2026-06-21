@@ -27,14 +27,7 @@ from food_agent.mcp.amap_client import AmapClient
 from food_agent.memory.long_term import LongTermMemory
 from food_agent.memory.short_term import ShortTermMemory
 from food_agent.tools.cuisine_consult import CuisineConsultTool
-from food_agent.tools.location import (
-    GeocodeTool,
-    RegeocodeTool,
-    RouteTool,
-    SearchAroundTool,
-    WeatherTool,
-    set_amap_client as _set_amap_client,
-)
+from food_agent.tools.location import set_amap_client as _set_amap_client
 from qwen_agent.llm import get_chat_model  # Phase B-2: dict LLM → 实例包装
 
 logger = logging.getLogger(__name__)
@@ -136,15 +129,10 @@ class FoodAgent:
             CuisineConsultTool(agent) for agent in self.cuisine_agents
         ]
 
-        # 加 5 个 location tools (如果 amap_client 存在)
-        if amap_client is not None:
-            self.tools.extend([
-                GeocodeTool(),
-                RegeocodeTool(),
-                SearchAroundTool(),
-                WeatherTool(),
-                RouteTool(),
-            ])
+        # 5 个 location tools (geocode/regeocode/search_around/weather/route)
+        # 不再直接暴露给 master LLM — 22 个 tool 超 LLM 选择能力 (Toolformer 建议 ≤10).
+        # 改由 3 个 analyzer 内部调 AmapClient, master 只看到 14 菜系 + 3 analyzer = 17 tool.
+        # amap_client 仍注入供 analyzer 用.
 
         # 加 3 维分析器 tools (Phase 3.2). dietary 注入 long_term + llm (Phase B-2 LLM 抽取)
         if enable_analyzers:

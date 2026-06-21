@@ -22,7 +22,8 @@
 | **流式输出 (3.7 polish)** | ✅ 完成 | commit `e741356` (master) + `df99f5c` (cli) |
 | **CLI AmapClient 集成修复** | ✅ 完成 | commit `df99f5c` (含在 cli 改动一起) |
 | **Phase 3.5 Web UI (Gradio)** | ✅ 完成 | qwen_agent.gui.WebUI 包装 FoodAgent._assistant |
-| 测试 | ✅ 421 个全过 | 整体覆盖率 ~83% (本次新增 14 个测试) |
+| **Phase 3.5 master tool 精简** | ✅ 完成 | 22 → 17 tool (location tool 收进 analyzer 内部) |
+| 测试 | ✅ 427 个全过 | 整体覆盖率 ~83% (本次新增 6 个测试) |
 
 ---
 
@@ -59,11 +60,19 @@
 - `.call(params)` 接收 JSON 字符串, 返回 JSON 字符串
 - 共享模块级 AmapClient (用 `set_amap_client()` / `get_amap_client()`)
 - 参数解析失败 / AmapClient 失败 → 错误 JSON, 不挂上层
+- **Phase 3.5: 不再直接暴露给 master LLM**, 改由 analyzer 内部调. 类保留
+  供单元测试 + 未来可能直接调用.
 
-### FoodAgent 集成
+### FoodAgent 集成 (Phase 3.5 改造)
 - 新增 `amap_client: AmapClient | None = None` 参数
-- 传了之后: 5 个 location tool 自动加入 `self.tools`
-- `master_v1.md` 新增"位置与天气工具"段, 描述典型用法流程
+- 传了之后: amap_client 注入到模块单例 (供 analyzer 内部用)
+- **5 个 location tool 不再自动加到 master.tools** — 改由 analyzer 内部调 AmapClient
+- master LLM 可见工具数: 22 (14 菜系 + 5 location + 3 analyzer) → **17 (14 菜系 + 3 analyzer)**
+- 理由: Toolformer 论文建议 LLM 同时可见 ≤10 个 tool, 17 仍有压力但比 22 好
+- 周边搜索 (search_around) 能力合并进 `analyze_location`: user_msg 含 "附近/找/搜"
+  + 食物关键词 (川菜/咖啡/火锅/...) 时自动 search_around, POI 列表放在返回 pois 字段.
+  master LLM 不再需要二次调 search_around, 调用链简化.
+- `master_v1.md` 删"位置与天气工具"段, 改写 `analyze_location` 描述包含周边搜索触发条件
 
 ### CLI 集成 (commit `df99f5c` 修复)
 - **Bug**: 之前 CLI 的 `_build_agent()` 没构造 `AmapClient`,

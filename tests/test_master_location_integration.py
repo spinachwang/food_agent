@@ -1,12 +1,17 @@
-"""测试 FoodAgent 接入 AmapClient + location tools (TDD).
+"""测试 FoodAgent 接入 AmapClient (Phase 3.5: location tool 改走 analyzer).
 
-Phase 3.3: master 集成.
+Phase 3.5 行为变化:
+- FoodAgent(amap_client=...) 接受 AmapClient 实例 (不变)
+- 5 个 location tools (geocode/regeocode/search_around/weather/route)
+  **不再** 加入 master.tools — 改由 3 个 analyzer (weather/location/dietary)
+  内部调 AmapClient, master LLM 看到的 tool 总数从 22 降到 17
+  (14 菜系 + 3 analyzer). Toolformer 建议 LLM 同时可见 ≤10 个 tool, 17
+  仍有压力但比 22 好. 后续可考虑 per-query 路由.
+- amap_client 仍注入模块级单例 (供 analyzer 内部 get_amap_client() 用)
 
-行为:
-- FoodAgent(amap_client=...) 接受 AmapClient 实例
-- 接受后: 5 个 location tools 自动加入 master.tools
-- 不传: 与 Phase 2 行为一致 (无 location tools)
-- amap_client 关闭时 (with 语句退出), master 应能优雅处理
+注: 5 个 location tool 类本身保留 (tools/location.py), 单元测试
+tests/test_location_tool.py 继续验证 tool 类本身可独立用, 只是不再被
+master 自动加载.
 """
 from __future__ import annotations
 
@@ -16,14 +21,7 @@ import pytest
 
 from food_agent.mcp.amap_client import AmapClient
 from food_agent.master import FoodAgent
-from food_agent.tools.location import (
-    GeocodeTool,
-    RegeocodeTool,
-    RouteTool,
-    SearchAroundTool,
-    WeatherTool,
-    set_amap_client,
-)
+from food_agent.tools.location import set_amap_client
 
 
 # =============================================================================
@@ -77,59 +75,67 @@ def test_foodagent_accepts_amap_client_param(amap_client) -> None:
     assert agent is not None
 
 
-def test_foodagent_registers_amap_tools_when_provided(amap_client) -> None:
-    """传 amap_client → 5 个 location tool 都在 self.tools."""
+def test_foodagent_no_longer_registers_raw_location_tools(amap_client) -> None:
+    """Phase 3.5: 5 个 raw location tool 不再加入 master.tools."""
     agent = FoodAgent(llm=FakeLLM(), amap_client=amap_client)  # type: ignore[arg-type]
     tool_names = [getattr(t, "name", None) for t in agent.tools]
-    assert "geocode" in tool_names
-    assert "regeocode" in tool_names
-    assert "search_around" in tool_names
-    assert "weather" in tool_names
-    assert "route" in tool_names
+    # raw location tool 不应出现
+    for raw in ("geocode", "regeocode", "search_around", "weather", "route"):
+        assert raw not in tool_names, (
+            f"{raw} 不应直接暴露给 master, 应走 analyzer 内部"
+        )
+    # analyzer tool 仍在
+    assert "analyze_location" in tool_names
+    assert "analyze_weather" in tool_names
 
 
-def test_foodagent_no_amap_client_no_location_tools(mock_env) -> None:
-    """不传 amap_client → 无 location tool (Phase 2 行为)."""
-    agent = FoodAgent(llm=FakeLLM())  # type: ignore[arg-type]
-    tool_names = [getattr(t, "name", None) for t in agent.tools]
-    assert "geocode" not in tool_names
-    assert "search_around" not in tool_names
-
-
-def test_foodagent_tools_count_with_and_without_amap(amap_client) -> None:
-    """有 amap 时 tools 数 = cuisine tools + 5."""
+def test_foodagent_tools_count_unaffected_by_amap(amap_client) -> None:
+    """Phase 3.5: 有/无 amap 时 master.tools 数相同 (location tool 不再算入)."""
     agent_without = FoodAgent(llm=FakeLLM())  # type: ignore[arg-type]
     agent_with = FoodAgent(llm=FakeLLM(), amap_client=amap_client)  # type: ignore[arg-type]
-    # 验证: with 比 without 多 5 个 (cuisine + 5 location)
-    assert len(agent_with.tools) - len(agent_without.tools) == 5
+    # Phase 3.5: 差异应为 0 (location tool 不再挂 master)
+    assert len(agent_with.tools) == len(agent_without.tools)
 
 
-def test_foodagent_amap_client_globally_registered(amap_client) -> None:
-    """构造后, 模块级 get_amap_client() 拿得到."""
+def test_foodagent_amap_client_still_globally_registered(amap_client) -> None:
+    """虽然不挂 tools, amap_client 仍注入 module 单例 (供 analyzer 内部用)."""
     agent = FoodAgent(llm=FakeLLM(), amap_client=amap_client)  # type: ignore[arg-type]
     from food_agent.tools.location import get_amap_client
     assert get_amap_client() is amap_client
 
 
 # =============================================================================
-# end-to-end: master 真能调 location tool
+# analyzer 内部用 amap_client (端到端)
 # =============================================================================
 
-def test_master_can_call_geocode_tool(amap_client) -> None:
-    """用 LLM 模拟 master 调 geocode tool: 不直接测, 但确保 tool 在 list 里能被 qwen-agent 调.
-
-    这里用 qwen-agent 的 tool list 验证: location tool schema 可被序列化.
-    """
-    agent = FoodAgent(llm=FakeLLM(), amap_client=amap_client)  # type: ignore[arg-type]
-    # 取 geocode tool
-    geocode_tool = next(t for t in agent.tools if getattr(t, "name", None) == "geocode")
-    # 模拟一次调
-    result = geocode_tool.call('{"address": "北京海淀中关村"}')
-    assert isinstance(result, str)
+def test_analyze_location_uses_injected_amap_client(amap_client) -> None:
+    """analyze_location 调用能用 FoodAgent 注入的 amap_client (mock 模式)."""
     import json
-    data = json.loads(result)
-    # mock 模式: 应有 location 字段
-    assert "location" in data or "error" in data  # error 也接受 (e.g. amap 限频)
+
+    from food_agent.agents.analyzers.location import LocationAnalyzerTool
+
+    agent = FoodAgent(llm=FakeLLM(), amap_client=amap_client)  # type: ignore[arg-type]
+    # 现在直接调 analyzer tool, 验证 mock amap 能用
+    tool = LocationAnalyzerTool()
+    data = json.loads(tool.call(json.dumps({"user_msg": "我在北京海淀"})))
+    # mock 模式 geocode 应有 lng/lat (新行为不返回顶层 location 字段)
+    assert "lng" in data and "lat" in data
+    assert data["source"] == "address"
+
+
+def test_analyze_location_search_around_uses_amap(amap_client) -> None:
+    """user_msg 含 "附近" + 食物词 → 自动 search_around, 用注入的 amap_client."""
+    import json
+
+    from food_agent.agents.analyzers.location import LocationAnalyzerTool
+
+    agent = FoodAgent(llm=FakeLLM(), amap_client=amap_client)  # type: ignore[arg-type]
+    tool = LocationAnalyzerTool()
+    data = json.loads(tool.call(json.dumps({"user_msg": "我在北京, 找川菜"})))
+    # mock 模式 search_around 返固定 2-3 个 POI
+    if "pois" in data:
+        assert len(data["pois"]) >= 1
+        assert data["search_keywords"] == "川菜"
 
 
 # =============================================================================
@@ -148,6 +154,11 @@ def test_two_foodagents_share_amap_client(amap_client) -> None:
     """两个 FoodAgent 共享同一 amap_client → set_amap_client 后者覆盖前者."""
     a1 = FoodAgent(llm=FakeLLM(), amap_client=amap_client)  # type: ignore[arg-type]
     a2 = FoodAgent(llm=FakeLLM(), amap_client=amap_client)  # type: ignore[arg-type]
-    # 两个 agent 都能正常调 location tool
+    # Phase 3.5: 5 个 raw location tool 不再挂 master.tools. 验证两个 agent
+    # 共享同一 amap_client 通过 analyzer 间接使用.
+    from food_agent.tools.location import get_amap_client
     for agent in [a1, a2]:
-        assert any(getattr(t, "name", None) == "geocode" for t in agent.tools)
+        # analyzer 仍可拿到 amap client (get_amap_client 模块单例被 a2 覆盖为同一实例)
+        assert get_amap_client() is amap_client
+        # raw location tool 不应出现在 master.tools
+        assert not any(getattr(t, "name", None) == "geocode" for t in agent.tools)
