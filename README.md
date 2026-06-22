@@ -136,7 +136,7 @@ src/food_agent/
 ├── config/             # yaml loader + 提示词 .md 文件
 └── data/cuisines/      # 菜系知识库 .md
 
-tests/                  # 430+ 个测试, 覆盖率 ~83%
+tests/                  # 440+ 个测试, 覆盖率 ~83%
 specs/                  # PRD / 架构 / 数据模型 / 进度文档 (SDD)
 examples/               # 可运行的示例脚本
 docs/                   # 项目其他文档 (面试亮点等)
@@ -170,7 +170,7 @@ docs/                   # 项目其他文档 (面试亮点等)
 PYTHONIOENCODING=utf-8 pytest --cov=src --cov-report=term-missing
 ```
 
-- **430+ 个测试全过** (含 qwen-agent patch 回归 + 防幻觉 prompt 合同测试)
+- **440+ 个测试全过** (含 qwen-agent patch 回归 + 防幻觉 prompt 合同测试)
 - 覆盖率 **~83%** (目标 ≥80%)
 - `FakeLLM` 不走真 API, CI 不消耗 token
 

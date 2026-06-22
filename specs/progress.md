@@ -4,7 +4,7 @@
 >
 > 更新规则：每次完成一个 Phase / 修完一个 bug，**直接改这里**，然后在 git commit 一起提交。
 
-最后更新: 2026-06-19
+最后更新: 2026-06-22
 
 ---
 
@@ -24,7 +24,8 @@
 | **Phase 3.5 Web UI (Gradio)** | ✅ 完成 | qwen_agent.gui.WebUI 包装 FoodAgent._assistant |
 | **Phase 3.5 master tool 精简** | ✅ 完成 | 22 → 17 tool (location tool 收进 analyzer 内部) |
 | **detect_location analyzer** | ✅ 完成 | 用户消息无地址时 master 主动调, IP 定位 (17 → 18 tool) |
-| 测试 | ✅ 433 个全过 | 整体覆盖率 ~83% (本次新增 6 个测试) |
+| **REPL→STM 接管** | ✅ 完成 | commit TBD, CLI 改用 session_id 让 STM 摘要生效 (避消息无限膨胀) |
+| 测试 | ✅ 442 个全过 | 整体覆盖率 ~83% (本次新增 6 个测试) |
 
 ---
 
@@ -274,6 +275,7 @@ with AmapClient() as amap:  # 默认 mock 模式 (或读 .env)
   - CLI `--verbose/-v` flag, REPL 默认开启
   - 工具调用 / 结果用 rich + emoji 实时显示 (🌦️ 查天气 / 🍜 请教川菜专家 / ✅ 预览)
 - CLI 改进 (--no-memory / --user-id / --reset)
+- ✅ **REPL 让 STM 接管** (本次): 之前 REPL 自己维护 `history: list[dict]`, 绕开 STM 的 token 估算 + LLM 摘要, 聊久了消息无限膨胀. 改成传 `session_id=f"repl-{user_id}"`, STM 自动在 6000 tokens 阈值触发摘要 + 保留最近 6 条原样. `reset` 调新加的 `agent.clear_stm(session_id)` 幂等清除. + 6 测试钉死.
 
 ---
 

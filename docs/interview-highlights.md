@@ -124,15 +124,39 @@ def _patch_qwen_agent_tool_call_id():
 
 ---
 
+## 7. REPL 自己管 history, 绕开了 STM 的压缩 — 已有基建要会用
+
+**场景**: REPL (`python -m food_agent --chat`) 用户聊到第 20 轮, messages 列表已经塞了几十条, 但 `FoodAgent.run(history=history, ...)` 走的是调用方传 history 的路径, **没走 STM**, token 阈值 + LLM 摘要全失效。STM (`ShortTermMemory`) 这套本来能用的基建, 在用户最常接触的 REPL 入口完全闲置。
+
+**根因**: master.py 的 `run()` 有两条历史注入路径 ——
+```python
+if history is not None:
+    messages.extend(list(history))       # 调用方传, CLI REPL 走这条
+elif session_id:
+    stm = self._get_or_create_stm(session_id)
+    messages.extend(stm.get_messages())  # STM 接管 + 摘要
+```
+CLI REPL 之前传 `history=`, 直接走第一条, **第二条连试都不试**。这不是 STM 的 bug, 是 CLI 没用对接口。**基建齐了没人用, 比没建更糟**。
+
+**修复** (commit TBD):
+1. CLI REPL 改传 `session_id=f"repl-{user_id}"`, 让 STM 接管 — 同一 user 复用同一 session, 不同 user 隔离
+2. 加 `FoodAgent.clear_stm(session_id)` 方法 (幂等), CLI `reset` 命令调它清空会话
+3. + 6 个测试钉死行为: REPL 不再传 history / session_id 复用 / 跨 user_id 隔离 / `clear_stm` 幂等 + 不影响其他 session
+
+**反思 / 通用启示**: **代码可读性 vs 正确路径选择是两件事**。`history is not None` 这条路径存在是合理的 (给上层最大灵活度), 但 CLI 走错就是 bug。**接口设计的反模式: 多个互斥的 "我用这个" 入口, 没文档说哪个是默认**。修这种 bug 关键是写测试钉死"应该走哪条", 不靠 code review 偶发抓。**REPL 的 `reset` 也是典型的 "看似用户功能, 实际是开发者信号"** — 清空 STM 等于告诉你 "之前的设计错了"。
+
+---
+
 ## 通用方法论收尾
 
-这 6 个 case 共同体现了几个我反复用的工作习惯:
+这 7 个 case 共同体现了几个我反复用的工作习惯:
 
-1. **先定位根因, 再写代码**: "外卖幻觉" 不是改一行 prompt 就完事, 是要理解 LLM 的认知边界 (没有边界感)。"22 tool 撑爆" 不是改 prompt 让模型更聪明, 是改架构让接口更简单。
-2. **测试钉死 prompt 合同**: prompt 是产品行为的一部分, 不是"配置文件随便改"。结构化测试 (断言 prompt 含/不含某些关键词) 能防 LLM 升级时悄悄退化。
-3. **静默降级是 bug 滋生的温床**: 类型契约、库协议、意图抽取 —— 任何"假装能用"的地方, 都要么 loud failure, 要么有可观测的降级路径。
+1. **先定位根因, 再写代码**: "外卖幻觉" 不是改一行 prompt 就完事, 是要理解 LLM 的认知边界 (没有边界感)。"22 tool 撑爆" 不是改 prompt 让模型更聪明, 是改架构让接口更简单。"REPL 没压缩" 不是给 REPL 加摘要逻辑, 是改 CLI 改用已有 STM。
+2. **测试钉死 prompt 合同 + 路径选择**: prompt 是产品行为的一部分, "REPL 走 STM" 是接口合同的一部分, 都不是"配置文件随便改"。结构化测试 (断言 prompt 含/不含某些关键词, 断言 REPL 传哪个 kwarg) 能防升级/重构时悄悄退化。
+3. **静默降级是 bug 滋生的温床**: 类型契约、库协议、意图抽取、接口选择 —— 任何"假装能用"或"用错接口假装没事"的地方, 都要么 loud failure, 要么有可观测的降级路径。
 4. **vendor 代码别动, 集成层打补丁**: monkey-patch 是被低估的设计模式, 关键是幂等 + 防御 + 可观测。
 5. **数据缺失是连续 confidence 值**: 不要二选一 (问 vs 不问), 多源 fallback + best-effort + 明说 confidence。
+6. **基建齐了要会用**: STM/LTM/Amap/Analyzer — 这些模块都在, 但 CLI/REPL/Web 三条入口各自走什么路径, 必须有清晰约定。否则就是 "看起来啥都有, 实际 REPL 跑的还是裸奔"。
 
 ---
 
@@ -146,3 +170,4 @@ def _patch_qwen_agent_tool_call_id():
 | 4 | `src/food_agent/llm.py:31-66` (`_patch_qwen_agent_tool_call_id`) + `tests/test_llm.py` (5 个 patch 回归) | Phase 1 bug fix |
 | 5 | `src/food_agent/agents/analyzers/detect_location.py` + `master_v1.md:18-21` (调用策略) | `d95ba77` |
 | 6 | `src/food_agent/agents/analyzers/dietary.py` (`analyze()` 走 LLM) + master.py:203-250 (写入 long_term) | Phase B-2 |
+| 7 | `src/food_agent/cli.py:243-265` (REPL session_id) + `src/food_agent/master.py:186-193` (`clear_stm`) + 6 个测试钉死路径选择 | TBD |

@@ -372,3 +372,123 @@ def test_make_event_handler_renders_tool_result(capsys: pytest.CaptureFixture) -
     assert "✅" in out  # 成功
     assert "❌" in out  # 失败
     assert "北京" in out
+
+
+# =============================================================================
+# REPL: STM 接管 (不再用 history 列表)
+# =============================================================================
+
+
+def test_run_repl_uses_session_id_not_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REPL 应传 session_id (让 STM 接管 + 摘要), 不再传 history.
+
+    回归测试: 之前 _run_repl 用 history=list[dict] 手动 append,
+    绕开 STM, 不触发 token 估算 / LLM 摘要. 修复后 REPL 也走 STM.
+    """
+    captured: dict = {"calls": []}
+
+    class FakeCuisine:
+        cuisine_id = "sichuan"
+        cuisine_name = "川菜"
+
+    class FakeAgent:
+        cuisine_agents = [FakeCuisine()]
+
+        def run(self, user_msg, **kwargs):
+            captured["calls"].append({
+                "user_msg": user_msg,
+                "session_id": kwargs.get("session_id"),
+                "history": kwargs.get("history"),
+                "user_id": kwargs.get("user_id"),
+            })
+            return "ok"
+
+    monkeypatch.setattr(cli, "_build_agent", lambda **kwargs: FakeAgent())
+    # 喂入两次有效输入, 然后 quit 退出
+    inputs = iter(["hello", "world"])
+    monkeypatch.setattr(
+        "rich.prompt.Prompt.ask",
+        lambda *a, **kw: next(inputs, "quit"),
+    )
+    cli._run_repl(mock=True, user_id="alice")
+
+    # 两次 run 调用都验证
+    assert len(captured["calls"]) == 2, captured["calls"]
+    for call in captured["calls"]:
+        assert call["history"] is None, (
+            f"REPL 不应传 history, 实际 {call['history']!r}"
+        )
+        assert call["session_id"] is not None, (
+            f"REPL 应传 session_id, 实际 {call['session_id']!r}"
+        )
+        assert call["user_id"] == "alice"
+    # 同一 session 复用同一个 session_id
+    assert captured["calls"][0]["session_id"] == captured["calls"][1]["session_id"]
+
+
+def test_run_repl_session_id_differs_per_user_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """不同 user_id 在 REPL 中应得到不同的 session_id (避免用户间串扰)."""
+    captured: dict = {"session_ids": set()}
+
+    class FakeCuisine:
+        cuisine_id = "sichuan"
+        cuisine_name = "川菜"
+
+    class FakeAgent:
+        cuisine_agents = [FakeCuisine()]
+
+        def run(self, user_msg, **kwargs):
+            captured["session_ids"].add(kwargs.get("session_id"))
+            return "ok"
+
+    monkeypatch.setattr(cli, "_build_agent", lambda **kwargs: FakeAgent())
+    # 两次 _run_repl 共用一个输入序列: alice→hello, alice→quit,
+    #                                 bob→hello,   bob→quit
+    shared_inputs = iter(["hello", "quit", "hello", "quit"])
+    monkeypatch.setattr(
+        "rich.prompt.Prompt.ask",
+        lambda *a, **kw: next(shared_inputs, "quit"),
+    )
+    cli._run_repl(mock=True, user_id="alice")
+    cli._run_repl(mock=True, user_id="bob")
+
+    assert len(captured["session_ids"]) == 2, (
+        f"alice 和 bob 应得到不同 session_id, 实际 {captured['session_ids']}"
+    )
+
+
+def test_run_repl_reset_clears_stm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REPL 'reset' 命令应调 agent.clear_stm, 不再 history = []."""
+    cleared: dict = {"called": False, "session_id": None}
+
+    class FakeCuisine:
+        cuisine_id = "sichuan"
+        cuisine_name = "川菜"
+
+    class FakeAgent:
+        cuisine_agents = [FakeCuisine()]
+
+        def clear_stm(self, session_id: str) -> None:
+            cleared["called"] = True
+            cleared["session_id"] = session_id
+
+        def run(self, user_msg, **kwargs):
+            return "ok"
+
+    monkeypatch.setattr(cli, "_build_agent", lambda **kwargs: FakeAgent())
+    # reset → quit
+    inputs = iter(["reset", "quit"])
+    monkeypatch.setattr(
+        "rich.prompt.Prompt.ask",
+        lambda *a, **kw: next(inputs, "quit"),
+    )
+    cli._run_repl(mock=True)
+
+    assert cleared["called"] is True
+    assert cleared["session_id"] is not None

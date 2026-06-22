@@ -385,3 +385,43 @@ def test_run_emits_events_in_order() -> None:
         i for i, e in enumerate(events) if e["type"] == "tool_result"
     )
     assert tool_call_idx < tool_result_idx  # tool_call 先, tool_result 后
+
+
+# =============================================================================
+# STM 管理 (CLI reset 用)
+# =============================================================================
+
+
+def test_food_agent_clear_stm_removes_session() -> None:
+    """clear_stm(session_id) 清除该 session 的 STM."""
+    llm = FakeLLM(["ok"])
+    agent = FoodAgent(llm=llm)
+
+    # 触发 STM 创建
+    agent._get_or_create_stm("test-session")
+    assert "test-session" in agent._short_term_by_session
+
+    # 清除
+    agent.clear_stm("test-session")
+    assert "test-session" not in agent._short_term_by_session
+
+
+def test_food_agent_clear_stm_nonexistent_session_no_error() -> None:
+    """clear_stm 不存在的 session_id 不报错 (幂等)."""
+    llm = FakeLLM(["ok"])
+    agent = FoodAgent(llm=llm)
+    # 从未创建过 session, clear 也不应 raise
+    agent.clear_stm("never-existed")  # should not raise
+
+
+def test_food_agent_clear_stm_only_affects_target_session() -> None:
+    """clear_stm 只清除目标 session, 其他 session 保留."""
+    llm = FakeLLM(["ok"])
+    agent = FoodAgent(llm=llm)
+    agent._get_or_create_stm("session-a")
+    agent._get_or_create_stm("session-b")
+
+    agent.clear_stm("session-a")
+
+    assert "session-a" not in agent._short_term_by_session
+    assert "session-b" in agent._short_term_by_session

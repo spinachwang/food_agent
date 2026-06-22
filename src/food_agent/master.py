@@ -183,6 +183,15 @@ class FoodAgent:
             self._short_term_by_session[session_id] = stm
         return stm
 
+    def clear_stm(self, session_id: str) -> None:
+        """清除指定 session 的 STM (CLI reset 用).
+
+        Args:
+            session_id: 会话 ID. 不存在时幂等不报错.
+        """
+        if hasattr(self, "_short_term_by_session"):
+            self._short_term_by_session.pop(session_id, None)
+
     def _recall_preferences_text(self, user_id: str, query: str) -> str:
         """召回用户偏好, 拼成 system message 文本. 失败 → ''"""
         if not self._long_term:

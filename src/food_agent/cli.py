@@ -236,7 +236,10 @@ def _run_repl(
         )
     )
 
-    history: list[dict] = []
+    # 稳定 session_id 让 STM 接管 (token 阈值 + LLM 摘要)
+    # 同 user 复用同一 session, 不同 user 隔离
+    session_id = f"repl-{user_id}"
+
     while True:
         try:
             user_input = Prompt.ask("\n[bold green]你[/]")
@@ -245,25 +248,21 @@ def _run_repl(
         if user_input.lower() in ("quit", "exit", "q"):
             break
         if user_input.lower() == "reset":
-            history = []
-            console.print("[dim]历史已清空.[/]")
+            agent.clear_stm(session_id)
+            console.print("[dim]会话已重置.[/]")
             continue
         if not user_input.strip():
             continue
 
         try:
             response = agent.run(
-                user_input, history=history, user_id=user_id, on_event=on_event,
+                user_input, session_id=session_id, user_id=user_id, on_event=on_event,
             )
         except FoodAgentError as e:
             console.print(f"[red][错误] {e}[/]")
             continue
 
         console.print(Panel(response, title="[yellow]老饕[/]"))
-
-        # 更新历史
-        history.append({"role": "user", "content": user_input})
-        history.append({"role": "assistant", "content": response})
 
     console.print("\n[dim]下次见, 别吃太辣 🌶️[/]")
     return 0
